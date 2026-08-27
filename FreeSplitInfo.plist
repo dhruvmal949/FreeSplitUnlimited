@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Free Split Share</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>pramela.freesplitunlimited.split</string>
+				<string>public.json</string>
+			</array>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.json</string>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Free Split Share</string>
+			<key>UTTypeIdentifier</key>
+			<string>pramela.freesplitunlimited.split</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>freesplit</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/json</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_freesplit-mesh._tcp</string>
+		<string>_freesplit-mesh._udp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Free Split uses your local network to sync splits directly with nearby friends' phones — no internet needed.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Free Split uses Bluetooth to discover and sync splits with nearby friends' phones.</string>
+</dict>
+</plist>
