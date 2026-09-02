@@ -6,19 +6,104 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import UIKit
 
 struct ContentView: View {
+    @State private var selectedTab = 1
+
+    var body: some View {
+        NavigationStack {
+            tabRoot
+        }
+        .id(selectedTab)
+        .environment(\.popToHome, { selectedTab = 1 })
+        .tint(AppTheme.teal)
+        .safeAreaInset(edge: .bottom) {
+            MainTabBar(selectedTab: selectedTab, onSelect: selectTab)
+        }
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                SyncCoordinator.shared.startNearby()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var tabRoot: some View {
+        switch selectedTab {
+        case 0:
+            FriendsView()
+        case 2:
+            NotificationsView()
+        case 3:
+            SettingsView()
+        default:
+            GroupsView()
+        }
+    }
+
+    private func selectTab(_ tab: Int) {
+        guard tab != selectedTab else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            selectedTab = tab
+        }
+    }
+}
+
+private struct MainTabBar: View {
+    let selectedTab: Int
+    var onSelect: (Int) -> Void
+
+    var body: some View {
+        HStack {
+            tabButton(0, title: "Friends", image: "person.fill")
+            tabButton(1, title: "Groups", image: "person.3.fill")
+            tabButton(2, title: "Notifications", image: "bell.fill")
+            tabButton(3, title: "Settings", image: "gearshape.fill")
+        }
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .frame(minHeight: AppTheme.mainTabBarHeight)
+        .background(.ultraThinMaterial)
+    }
+
+    private func tabButton(_ index: Int, title: String, image: String) -> some View {
+        Button {
+            guard selectedTab != index else { return }
+            onSelect(index)
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: image)
+                    .font(.system(size: 20, weight: .semibold))
+                Text(title)
+                    .font(.caption2)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .foregroundStyle(selectedTab == index ? AppTheme.teal : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+}
+
+private struct GroupsView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query(
-        filter: #Predicate<Occasion> { !$0.isDeleted },
-        sort: \Occasion.createdAt,
-        order: .reverse
-    ) private var occasions: [Occasion]
+    @Query(sort: \Occasion.createdAt, order: .reverse)
+    private var allOccasions: [Occasion]
     @State private var showingAddOccasion = false
     @State private var showingImporter = false
-    @State private var selectedOccasionID: UUID?
     @State private var statusMessage: StatusMessage?
-    @ObservedObject private var sync = SyncCoordinator.shared.mesh
+    @State private var openedGroupID: OpenedGroup?
+    @State private var pendingOpenGroupID: UUID?
+    @State private var showingFilter = false
+    @State private var groupFilter: GroupBalanceFilter = .none
+
+    private struct OpenedGroup: Identifiable, Hashable {
+        let id: UUID
+    }
 
     private struct StatusMessage: Identifiable {
         let id = UUID()
@@ -26,95 +111,111 @@ struct ContentView: View {
         let message: String
     }
 
-    private var selectedOccasion: Occasion? {
-        guard let selectedOccasionID else { return nil }
-        return occasions.first(where: { $0.id == selectedOccasionID })
+    /// Filter in Swift — `#Predicate` on SwiftData can trap (`brk`) after schema changes.
+    private var occasions: [Occasion] {
+        var seen = Set<UUID>()
+        return allOccasions.filter { !$0.isDeleted && seen.insert($0.id).inserted }
+    }
+
+    private var visibleOccasions: [Occasion] {
+        occasions.filter { groupFilter.matches(myNet: BalanceCalculator.myNet(in: $0)) }
+    }
+
+    private var overallNet: Decimal {
+        occasions.reduce(0) { $0 + BalanceCalculator.myNet(in: $1) }
     }
 
     var body: some View {
-        NavigationSplitView {
-            sidebarContent
-                .navigationTitle("Free Split")
-                .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Label(
-                            sync.connectedPeerCount > 0
-                                ? "\(sync.connectedPeerCount) Nearby"
-                                : "Offline Sync Ready",
-                            systemImage: sync.connectedPeerCount > 0
-                                ? "dot.radiowaves.left.and.right"
-                                : "wifi.slash"
-                        )
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.teal)
-                        .accessibilityHint("Nearby mesh works without internet. Keep Wi‑Fi and Bluetooth on.")
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            showingImporter = true
-                        } label: {
-                            Label("Import Split", systemImage: "square.and.arrow.down")
+        Group {
+            if occasions.isEmpty {
+                emptyState
+            } else {
+                List {
+                    Section {
+                        OverallBalanceBanner(net: overallNet) {
+                            showingFilter = true
                         }
                     }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            showingAddOccasion = true
-                        } label: {
-                            Label("New Split", systemImage: "plus")
-                        }
-                    }
-                }
-                .safeAreaInset(edge: .bottom) {
-                    VStack(spacing: 8) {
-                        Button {
-                            showingAddOccasion = true
-                        } label: {
-                            Text("New Split")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(AppTheme.teal)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 12))
 
-                        Button {
-                            showingImporter = true
-                        } label: {
-                            Text("Import Split (AirDrop / Files)")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
+                    if visibleOccasions.isEmpty {
+                        Text("No groups match this filter.")
+                            .foregroundStyle(.secondary)
+                            .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(visibleOccasions, id: \.id) { occasion in
+                            NavigationLink {
+                                OccasionDetailView(occasion: occasion)
+                            } label: {
+                                OccasionRowView(occasion: occasion)
+                            }
+                            .listRowBackground(Color.white.opacity(0.78))
                         }
-                        .buttonStyle(.bordered)
-                        .tint(AppTheme.teal)
+                        .onDelete(perform: deleteOccasions)
                     }
-                    .padding(.horizontal)
-                    .padding(.bottom, 8)
-                    .background(.ultraThinMaterial)
+
+                    Section {
+                        createGroupBar
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 16, leading: 16, bottom: 24, trailing: 16))
                 }
-                .freeSplitBackground()
-        } detail: {
-            NavigationStack {
-                if let occasion = selectedOccasion {
-                    OccasionDetailView(occasion: occasion)
-                } else {
-                    ContentUnavailableView {
-                        Label("Select a Split", systemImage: "person.3")
-                    } description: {
-                        Text("Choose a split from the sidebar to see expenses and balances.")
-                    }
-                    .freeSplitBackground()
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .contentMargins(.bottom, 12, for: .scrollContent)
+            }
+        }
+        .navigationTitle("Home")
+        .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingImporter = true
+                } label: {
+                    Label("Import from File", systemImage: "square.and.arrow.down")
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showingFilter = true
+                } label: {
+                    Label("Set filter", systemImage: "plus")
                 }
             }
         }
-        .tint(AppTheme.teal)
-        .sheet(isPresented: $showingAddOccasion) {
-            AddOccasionView()
+        .confirmationDialog("Set filter", isPresented: $showingFilter, titleVisibility: .visible) {
+            ForEach(GroupBalanceFilter.allCases) { option in
+                Button((groupFilter == option ? "✓ " : "") + option.title) {
+                    groupFilter = option
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .freeSplitBackground()
+        .navigationDestination(item: $openedGroupID) { token in
+            if let occasion = occasions.first(where: { $0.id == token.id }) {
+                OccasionDetailView(occasion: occasion)
+            } else {
+                NoneState(image: "person.3", message: "This group isn’t available.")
+                    .homeBackButton()
+            }
+        }
+        .sheet(isPresented: $showingAddOccasion, onDismiss: {
+            if let id = pendingOpenGroupID {
+                pendingOpenGroupID = nil
+                openedGroupID = OpenedGroup(id: id)
+            }
+        }) {
+            CreateGroupView { id in
+                pendingOpenGroupID = id
+            }
         }
         .fileImporter(
             isPresented: $showingImporter,
-            allowedContentTypes: [.freeSplit, .json],
+            allowedContentTypes: [.json, .data, .item],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -135,23 +236,35 @@ struct ContentView: View {
                 dismissButton: .default(Text("OK"))
             )
         }
-        .onChange(of: occasions.count) { _, _ in
-            if let selectedOccasionID,
-               !occasions.contains(where: { $0.id == selectedOccasionID }) {
-                self.selectedOccasionID = nil
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .freeSplitDidImport)) { note in
-            if let id = note.object as? UUID {
-                selectedOccasionID = id
+            if let id = note.object as? UUID,
+               let name = occasions.first(where: { $0.id == id })?.name {
+                statusMessage = StatusMessage(
+                    title: "Split Imported",
+                    message: "\"\(name)\" is ready on this phone."
+                )
+            } else {
+                statusMessage = StatusMessage(
+                    title: "Split Imported",
+                    message: "The split is ready on this phone."
+                )
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .freeSplitImportFailed)) { note in
+            let message = (note.userInfo?["message"] as? String)
+                ?? "Couldn't open this split file."
+            statusMessage = StatusMessage(title: "Import Failed", message: message)
+        }
+    }
+
+    private func openNewSplit() {
+        guard !showingAddOccasion else { return }
+        showingAddOccasion = true
     }
 
     private func importSharedSplit(from url: URL) {
         do {
             let occasion = try SplitShare.importFile(at: url, into: modelContext)
-            selectedOccasionID = occasion.id
             statusMessage = StatusMessage(
                 title: "Split Imported",
                 message: "\"\(occasion.name)\" is ready on this phone. No internet was required."
@@ -164,63 +277,54 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder
-    private var sidebarContent: some View {
-        if occasions.isEmpty {
-            emptyState
-        } else {
-            List(selection: $selectedOccasionID) {
-                ForEach(occasions, id: \.id) { occasion in
-                    OccasionRowView(occasion: occasion)
-                        .tag(occasion.id)
-                        .listRowBackground(Color.white.opacity(0.78))
-                }
-                .onDelete(perform: deleteOccasions)
+    private var emptyState: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                NoneState(
+                    image: "person.3",
+                    message: "No groups yet. Create a group to start sharing expenses."
+                )
+                .frame(minHeight: 280)
+
+                createGroupBar
             }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 28)
         }
     }
 
-    private var emptyState: some View {
-        ContentUnavailableView {
-            VStack(spacing: 16) {
-                Image("AppLogo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 96, height: 96)
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
-
-                Text("No Splits Yet")
-                    .font(.title2.weight(.semibold))
-            }
-        } description: {
-            Text("Create a split like a trip, dinner, or roommate month to start splitting expenses.")
-        } actions: {
-            Button("New Split") {
-                showingAddOccasion = true
+    private var createGroupBar: some View {
+        VStack(spacing: 8) {
+            Button {
+                openNewSplit()
+            } label: {
+                Text("Create Group")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
             }
             .buttonStyle(.borderedProminent)
             .tint(AppTheme.teal)
+            .disabled(showingAddOccasion)
 
-            Button("Import Split") {
-                showingImporter = true
+            if occasions.isEmpty {
+                Button {
+                    showingImporter = true
+                } label: {
+                    Text("Import from File")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.bordered)
+                .tint(AppTheme.teal)
             }
-            .buttonStyle(.bordered)
-            .tint(AppTheme.teal)
         }
     }
 
     private func deleteOccasions(at offsets: IndexSet) {
         for index in offsets {
-            let occasion = occasions[index]
-            if occasion.id == selectedOccasionID {
-                selectedOccasionID = nil
-            }
-            // Soft-delete (tombstone) instead of a hard delete so the deletion
-            // propagates to other phones via mesh/cloud sync instead of the
-            // split silently reappearing next time they sync.
+            let occasion = visibleOccasions[index]
             occasion.isDeleted = true
             occasion.touch()
         }
@@ -230,32 +334,57 @@ struct ContentView: View {
 
 extension Notification.Name {
     static let freeSplitDidImport = Notification.Name("freeSplitDidImport")
+    static let freeSplitImportFailed = Notification.Name("freeSplitImportFailed")
 }
 
-private struct OccasionRowView: View {
+struct OccasionRowView: View {
     let occasion: Occasion
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(occasion.name)
-                .font(.headline)
-                .foregroundStyle(.primary)
+        HStack(spacing: 12) {
+            groupArtwork
 
-            HStack(spacing: 12) {
-                Label("\(occasion.uniqueMembers.count)", systemImage: "person.2")
-                Label(CurrencyFormat.string(from: occasion.totalSpent), systemImage: "dollarsign.circle")
-            }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(occasion.name)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
 
-            if !occasion.note.isEmpty {
-                Text(occasion.note)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
+                HStack(spacing: 12) {
+                    Label(occasion.kind.title, systemImage: occasion.kind.symbol)
+                    Label("\(occasion.uniqueMembers.count)", systemImage: "person.2")
+                    Label(CurrencyFormat.string(from: occasion.totalSpent), systemImage: "dollarsign.circle")
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+                if !occasion.note.isEmpty {
+                    Text(occasion.note)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private var groupArtwork: some View {
+        if let data = occasion.coverImageData, let image = UIImage(data: data) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        } else {
+            Image(systemName: occasion.kind.symbol)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(AppTheme.teal)
+                .frame(width: 44, height: 44)
+                .background(AppTheme.lightAqua, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
     }
 }
 

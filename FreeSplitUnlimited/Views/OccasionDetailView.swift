@@ -10,22 +10,29 @@ import UIKit
 struct OccasionDetailView: View {
     @Bindable var occasion: Occasion
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
 
     @State private var showingAddExpense = false
     @State private var showingAddMember = false
+    @State private var showingSettings = false
     @State private var editingFriendID: UUID?
     @State private var editingExpenseID: UUID?
     @State private var selectedTab = 0
     @State private var sharePayload: SharePayload?
     @State private var shareAlert: String?
+    @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
 
     private struct SharePayload: Identifiable {
         let id = UUID()
         let url: URL
+        let message: String
     }
 
     private var sortedExpenses: [Expense] {
-        occasion.expenses.sorted { $0.date > $1.date }
+        var seen = Set<UUID>()
+        return occasion.expenses
+            .filter { seen.insert($0.id).inserted }
+            .sorted { $0.date > $1.date }
     }
 
     private var balances: [PersonBalance] {
@@ -36,44 +43,39 @@ struct OccasionDetailView: View {
         BalanceCalculator.settlements(for: occasion)
     }
 
+    private var isAlone: Bool {
+        occasion.uniqueMembers.count < 2
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            summaryHeader
-
-            Picker("Section", selection: $selectedTab) {
-                Text("Expenses").tag(0)
-                Text("Balances").tag(1)
-                Text("Friends").tag(2)
-            }
-            .pickerStyle(.segmented)
-            .padding()
+            heroHeader
+            pillBar
 
             Group {
-                switch selectedTab {
-                case 0:
-                    expensesTab
-                case 1:
-                    balancesTab
-                default:
-                    friendsTab
+                if isAlone, selectedTab == 0 {
+                    aloneInviteCard
+                } else {
+                    switch selectedTab {
+                    case 1:
+                        balancesTab
+                    case 2:
+                        whoIsOwedTab
+                    case 3:
+                        totalTab
+                    default:
+                        expensesTab
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .navigationTitle(occasion.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    shareSplit()
-                } label: {
-                    Label("Share Split", systemImage: "square.and.arrow.up")
-                }
-            }
-        }
-        .freeSplitBackground()
+        .background(Color(.systemBackground))
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarBackButtonHidden(true)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .sheet(item: $sharePayload) { payload in
-            ShareSheet(items: [payload.url])
+            ShareSheet(url: payload.url, title: occasion.name, message: payload.message)
         }
         .alert("Couldn't Share", isPresented: Binding(
             get: { shareAlert != nil },
@@ -84,21 +86,24 @@ struct OccasionDetailView: View {
             Text(shareAlert ?? "")
         }
         .safeAreaInset(edge: .bottom) {
-            Button {
-                showingAddExpense = true
-            } label: {
-                Text("Add Expense")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+            HStack {
+                Spacer()
+                Button {
+                    showingAddExpense = true
+                } label: {
+                    Label("Add expense", systemImage: "list.bullet.rectangle")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppTheme.teal)
+                .disabled(isAlone)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(AppTheme.teal)
-            .disabled(occasion.uniqueMembers.count < 2)
-            .padding(.horizontal)
+            .padding(.horizontal, 16)
             .padding(.bottom, 8)
-            .background(.ultraThinMaterial)
         }
+        .avoidsMainTabBar()
         .sheet(isPresented: $showingAddExpense) {
             AddExpenseView(occasion: occasion)
         }
@@ -112,7 +117,16 @@ struct OccasionDetailView: View {
             }
         }
         .sheet(isPresented: $showingAddMember) {
-            EditFriendView(occasion: occasion)
+            FriendSearchPicker(
+                contactsAllowed: contactsAllowed,
+                savedFriends: KnownFriendsStore.previouslyUsedFriends(from: modelContext),
+                onPick: { contacts in
+                    addMembers(contacts)
+                },
+                onContactsAccessGranted: {
+                    contactsAllowed = true
+                }
+            )
         }
         .sheet(isPresented: Binding(
             get: { editingFriendID != nil },
@@ -123,38 +137,134 @@ struct OccasionDetailView: View {
                 EditFriendView(occasion: occasion, person: person)
             }
         }
-        .onAppear {
-            occasion.deduplicateRelationships()
+        .sheet(isPresented: $showingSettings) {
+            GroupSettingsView(occasion: occasion) {
+                dismiss()
+            }
         }
     }
 
-    private var summaryHeader: some View {
-        VStack(spacing: 4) {
-            Text(CurrencyFormat.string(from: occasion.totalSpent))
-                .font(.system(.largeTitle, design: .rounded, weight: .bold))
-            Text("total across \(occasion.expenses.count) expense\(occasion.expenses.count == 1 ? "" : "s")")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            if !occasion.note.isEmpty {
-                Text(occasion.note)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 2)
+    private var heroHeader: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                headerCircleButton(systemImage: "chevron.left", label: "Back to groups") {
+                    dismiss()
+                }
+                Spacer()
+                headerCircleButton(systemImage: "gearshape.fill", label: "Group settings") {
+                    showingSettings = true
+                }
             }
 
-            Button {
-                shareSplit()
-            } label: {
-                Label("Share Offline (AirDrop)", systemImage: "wifi.slash")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .buttonStyle(.bordered)
-            .tint(AppTheme.teal)
-            .padding(.top, 8)
+            Text(occasion.name)
+                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(2)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-        .background(AppTheme.heroCardGradient)
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .padding(.bottom, 22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            ZStack {
+                LinearGradient(
+                    colors: [AppTheme.deepTeal, AppTheme.teal, AppTheme.brightTeal],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                WaveShape()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(height: 90)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+            .ignoresSafeArea(edges: .top)
+        }
+    }
+
+    private func headerCircleButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(AppTheme.deepTeal)
+                .frame(width: 36, height: 36)
+                .background(.white, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private var pillBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                pill("Expenses", tag: 0)
+                pill("Settle up", tag: 1)
+                pill("Balances", tag: 2)
+                pill("Total", tag: 3)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .background(Color(.systemBackground))
+    }
+
+    private func pill(_ title: String, tag: Int) -> some View {
+        Button {
+            selectedTab = tag
+        } label: {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+                .foregroundStyle(selectedTab == tag ? Color.white : Color.primary)
+                .background(
+                    selectedTab == tag ? AppTheme.teal : Color.clear,
+                    in: Capsule()
+                )
+                .overlay {
+                    Capsule()
+                        .stroke(Color.secondary.opacity(0.28), lineWidth: selectedTab == tag ? 0 : 1)
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var aloneInviteCard: some View {
+        VStack {
+            VStack(spacing: 16) {
+                Text("You're the only one here!")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    Task { await presentMemberPicker() }
+                } label: {
+                    Label("Add members", systemImage: "person.badge.plus")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppTheme.teal)
+
+                Button {
+                    shareSplit()
+                } label: {
+                    Text("Share a link")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.bordered)
+                .tint(AppTheme.teal)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+
+            Spacer()
+        }
     }
 
     private var expensesTab: some View {
@@ -163,7 +273,7 @@ struct OccasionDetailView: View {
                 ContentUnavailableView(
                     "No Expenses",
                     systemImage: "cart",
-                    description: Text("Tap Add Expense below to log something someone paid for. Tap an expense later to edit it.")
+                    description: Text("Tap Add expense to log something someone paid for.")
                 )
             } else {
                 List {
@@ -223,48 +333,63 @@ struct OccasionDetailView: View {
         .freeSplitListStyle()
     }
 
-    private var friendsTab: some View {
+    private var whoIsOwedTab: some View {
         List {
-            Section {
-                ForEach(occasion.sortedMembers(), id: \.id) { person in
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(person.name)
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-
-                            FriendContactActionsView(person: person, splitName: occasion.name)
-                        }
-
-                        Spacer(minLength: 8)
-
-                        Button("Edit") {
-                            editingFriendID = person.id
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppTheme.teal)
+            Section("Who is owed") {
+                ForEach(balances) { balance in
+                    HStack {
+                        Text(balance.person.name)
+                        Spacer()
+                        Text(balanceLabel(for: balance.net))
+                            .foregroundStyle(balanceColor(for: balance.net))
+                            .fontWeight(.semibold)
                     }
-                    .padding(.vertical, 4)
                     .listRowBackground(Color.white.opacity(0.78))
                 }
-                .onDelete(perform: deleteMembers)
-            } footer: {
-                Text("Tap Send Invite, Email, or Text — then tap Send in Mail/Messages. Saving a friend's contact does not auto-send.")
-            }
-
-            Section {
-                Button {
-                    showingAddMember = true
-                } label: {
-                    Text("Add Friend")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                }
-                .listRowBackground(AppTheme.teal)
-                .foregroundStyle(.white)
             }
         }
         .freeSplitListStyle()
+    }
+
+    private var totalTab: some View {
+        VStack(spacing: 8) {
+            Text(CurrencyFormat.string(from: occasion.totalSpent))
+                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+            Text("\(occasion.kind.title) · \(occasion.expenses.count) expense\(occasion.expenses.count == 1 ? "" : "s")")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            if !occasion.note.isEmpty {
+                Text(occasion.note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.top, 28)
+        .frame(maxWidth: .infinity)
+    }
+
+    @MainActor
+    private func presentMemberPicker() async {
+        await ContactAuthorization.requestIfNeeded()
+        contactsAllowed = ContactAuthorization.canUseSystemPicker
+        showingAddMember = true
+    }
+
+    private func addMembers(_ contacts: [PickedContact]) {
+        let existing = Set(occasion.uniqueMembers.map { $0.name.lowercased() })
+        var added = false
+        for contact in contacts where !contact.isMe {
+            let name = contact.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, !existing.contains(name.lowercased()) else { continue }
+            let person = Person(name: name, email: contact.email, phone: contact.phone)
+            person.occasion = occasion
+            modelContext.insert(person)
+            added = true
+        }
+        guard added else { return }
+        occasion.touch()
+        modelContext.persist()
     }
 
     private func balanceLabel(for net: Decimal) -> String {
@@ -300,22 +425,48 @@ struct OccasionDetailView: View {
         modelContext.persist()
     }
 
-    /// AirDrop / Files / Messages — works without internet (AirDrop uses Bluetooth + peer Wi‑Fi).
     private func shareSplit() {
         do {
             let url = try SplitShare.temporaryFileURL(for: occasion)
-            sharePayload = SharePayload(url: url)
+            sharePayload = SharePayload(
+                url: url,
+                message: "Join my Free Split group “\(occasion.name)”. Open this file in Free Split."
+            )
         } catch {
             shareAlert = error.localizedDescription
         }
     }
 }
 
+private struct WaveShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let midY = rect.height * 0.45
+        path.move(to: CGPoint(x: 0, y: midY))
+        path.addCurve(
+            to: CGPoint(x: rect.width, y: midY * 0.7),
+            control1: CGPoint(x: rect.width * 0.3, y: midY - 18),
+            control2: CGPoint(x: rect.width * 0.7, y: midY + 22)
+        )
+        path.addLine(to: CGPoint(x: rect.width, y: rect.height))
+        path.addLine(to: CGPoint(x: 0, y: rect.height))
+        path.closeSubpath()
+        return path
+    }
+}
+
 private struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
+    let url: URL
+    let title: String
+    var message: String = ""
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let item = SplitFileActivityItem(url: url, title: title)
+        var items: [Any] = [item]
+        if !message.isEmpty {
+            items.insert(message, at: 0)
+        }
+        return UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}

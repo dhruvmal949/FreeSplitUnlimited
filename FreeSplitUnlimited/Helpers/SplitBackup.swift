@@ -25,6 +25,7 @@ struct BackupOccasion: Codable {
     /// Defaults keep older backup files (saved before sync existed) loadable.
     var updatedAt: Date = .now
     var isDeleted: Bool = false
+    var groupType: String = GroupKind.other.rawValue
     var members: [BackupPerson]
     var expenses: [BackupExpense]
 }
@@ -57,7 +58,6 @@ struct BackupShare: Codable {
 enum SplitBackup {
     private static let keychainService = "pramela.FreeSplitUnlimited.backup"
     private static let keychainAccount = "splitsSnapshot"
-    private static let iCloudKey = "freeSplit.splitsBackup.v1"
 
     static func save(from context: ModelContext) {
         do {
@@ -68,7 +68,8 @@ enum SplitBackup {
             )
             let data = try JSONEncoder().encode(snapshot)
             saveToKeychain(data)
-            saveToiCloud(data)
+            // iCloud KVS is skipped: this target has no ubiquity entitlements.
+            // NSUbiquitousKeyValueStore.default traps with brk #0x1 without them.
         } catch {
             print("Split backup failed: \(error)")
         }
@@ -81,16 +82,19 @@ enum SplitBackup {
             let existing = try context.fetch(FetchDescriptor<Occasion>())
             guard existing.isEmpty else { return false }
 
-            guard let data = loadFromiCloud() ?? loadFromKeychain(),
+            guard let data = loadFromKeychain(),
                   let snapshot = try? JSONDecoder().decode(SplitsBackupSnapshot.self, from: data),
                   !snapshot.occasions.isEmpty else {
                 return false
             }
 
+            var seenIDs = Set<UUID>()
             for backup in snapshot.occasions {
+                guard seenIDs.insert(backup.id).inserted else { continue }
                 importOccasion(backup, into: context)
             }
             try context.save()
+            KnownFriendsStore.remember(from: context)
             return true
         } catch {
             print("Split restore failed: \(error)")
@@ -108,6 +112,7 @@ enum SplitBackup {
             createdAt: occasion.createdAt,
             updatedAt: occasion.updatedAt,
             isDeleted: occasion.isDeleted,
+            groupType: occasion.groupType,
             members: occasion.uniqueMembers.map {
                 BackupPerson(id: $0.id, name: $0.name, email: $0.email, phone: $0.phone)
             },
@@ -139,20 +144,33 @@ enum SplitBackup {
     /// Inserts a split, or replaces an existing one with the same id — but only if the
     /// incoming copy is newer (last-write-wins). Returns nil if the incoming copy was
     /// ignored because the local copy is already up to date or newer.
+    /// Pass `force: true` for an explicit user import (AirDrop / Files) so the opened
+    /// file always appears, even if a deleted or newer local copy exists.
     @discardableResult
-    static func upsert(_ backup: BackupOccasion, into context: ModelContext) throws -> Occasion? {
-        let existing = try context.fetch(FetchDescriptor<Occasion>()).first { $0.id == backup.id }
+    static func upsert(_ backup: BackupOccasion, into context: ModelContext, force: Bool = false) throws -> Occasion? {
+        let existing = ((try? context.fetch(FetchDescriptor<Occasion>())) ?? [])
+            .first { $0.id == backup.id }
 
-        if let existing, existing.updatedAt >= backup.updatedAt {
-            // Local copy is already current (or newer) — nothing to merge.
+        if let existing, !force, existing.updatedAt >= backup.updatedAt {
             return nil
         }
 
+        let occasion: Occasion
         if let existing {
-            context.delete(existing)
-            try context.save()
+            // Update in place. Deleting a live SwiftData object while @Query
+            // is rendering it is a common `brk` (invalidated model / ForEach).
+            existing.name = backup.name
+            existing.note = backup.note
+            existing.createdAt = backup.createdAt
+            existing.updatedAt = backup.updatedAt
+            existing.isDeleted = backup.isDeleted
+            existing.groupType = backup.groupType
+            replaceChildren(of: existing, with: backup, into: context)
+            occasion = existing
+        } else {
+            occasion = importOccasion(backup, into: context)
         }
-        let occasion = importOccasion(backup, into: context)
+
         try context.save()
         SplitBackup.save(from: context)
         return occasion
@@ -165,12 +183,138 @@ enum SplitBackup {
             note: backup.note,
             createdAt: backup.createdAt,
             updatedAt: backup.updatedAt,
-            id: backup.id
+            id: backup.id,
+            groupType: backup.groupType
         )
         occasion.isDeleted = backup.isDeleted
+        occasion.groupType = backup.groupType
+        populate(occasion, from: backup, into: context)
+        context.insert(occasion)
+        return occasion
+    }
 
+    private static func replaceChildren(of occasion: Occasion, with backup: BackupOccasion, into context: ModelContext) {
+        let peopleByID = reconcileMembers(of: occasion, with: backup.members, into: context)
+        reconcileExpenses(of: occasion, with: backup.expenses, peopleByID: peopleByID, into: context)
+    }
+
+    /// Updates the member graph in place. Deleting every child and re-inserting
+    /// while `@Query` is showing those objects traps with `EXC_BREAKPOINT`.
+    @discardableResult
+    private static func reconcileMembers(
+        of occasion: Occasion,
+        with backupMembers: [BackupPerson],
+        into context: ModelContext
+    ) -> [UUID: Person] {
+        var peopleByID: [UUID: Person] = [:]
+        for member in occasion.members where peopleByID[member.id] == nil {
+            peopleByID[member.id] = member
+        }
+
+        var keep = Set<UUID>()
+        for backup in backupMembers {
+            guard keep.insert(backup.id).inserted else { continue }
+            if let existing = peopleByID[backup.id] {
+                existing.name = backup.name
+                existing.email = backup.email
+                existing.phone = backup.phone
+            } else {
+                let person = Person(
+                    name: backup.name,
+                    email: backup.email,
+                    phone: backup.phone,
+                    id: backup.id
+                )
+                person.occasion = occasion
+                context.insert(person)
+                peopleByID[backup.id] = person
+            }
+        }
+
+        for member in occasion.members where !keep.contains(member.id) {
+            context.delete(member)
+            peopleByID[member.id] = nil
+        }
+        occasion.members = backupMembers.compactMap { peopleByID[$0.id] }
+        return peopleByID
+    }
+
+    private static func reconcileExpenses(
+        of occasion: Occasion,
+        with backupExpenses: [BackupExpense],
+        peopleByID: [UUID: Person],
+        into context: ModelContext
+    ) {
+        var expensesByID: [UUID: Expense] = [:]
+        for expense in occasion.expenses where expensesByID[expense.id] == nil {
+            expensesByID[expense.id] = expense
+        }
+
+        var keep = Set<UUID>()
+        var next: [Expense] = []
+        for backup in backupExpenses {
+            guard keep.insert(backup.id).inserted else { continue }
+            var seenParticipantIDs = Set<UUID>()
+            let participants = backup.participantIDs.compactMap { id -> Person? in
+                guard seenParticipantIDs.insert(id).inserted else { return nil }
+                return peopleByID[id]
+            }
+            let amount = Decimal(string: backup.amount) ?? 0
+            let method = SplitMethod(rawValue: backup.splitMethodRaw) ?? .equal
+
+            let expense: Expense
+            if let existing = expensesByID[backup.id] {
+                existing.title = backup.title
+                existing.amount = amount
+                existing.date = backup.date
+                existing.splitMethod = method
+                existing.paidBy = backup.paidByID.flatMap { peopleByID[$0] }
+                existing.participants = participants
+                expense = existing
+            } else {
+                expense = Expense(
+                    title: backup.title,
+                    amount: amount,
+                    date: backup.date,
+                    splitMethod: method,
+                    paidBy: backup.paidByID.flatMap { peopleByID[$0] },
+                    participants: participants,
+                    shares: [],
+                    id: backup.id
+                )
+                expense.occasion = occasion
+                context.insert(expense)
+            }
+
+            for share in expense.shares {
+                context.delete(share)
+            }
+            expense.shares = []
+            if method != .equal {
+                var seenShareIDs = Set<UUID>()
+                for shareBackup in backup.shares {
+                    guard seenShareIDs.insert(shareBackup.personID).inserted,
+                          let person = peopleByID[shareBackup.personID],
+                          let value = Decimal(string: shareBackup.value) else { continue }
+                    expense.shares.append(ExpenseShare(person: person, value: value))
+                }
+            }
+            next.append(expense)
+        }
+
+        for expense in occasion.expenses where !keep.contains(expense.id) {
+            for share in expense.shares {
+                context.delete(share)
+            }
+            context.delete(expense)
+        }
+        occasion.expenses = next
+    }
+
+    private static func populate(_ occasion: Occasion, from backup: BackupOccasion, into context: ModelContext) {
         var peopleByID: [UUID: Person] = [:]
         for member in backup.members {
+            guard peopleByID[member.id] == nil else { continue }
             let person = Person(
                 name: member.name,
                 email: member.email,
@@ -182,9 +326,15 @@ enum SplitBackup {
             context.insert(person)
         }
 
+        var seenExpenseIDs = Set<UUID>()
         for expenseBackup in backup.expenses {
+            guard seenExpenseIDs.insert(expenseBackup.id).inserted else { continue }
             let amount = Decimal(string: expenseBackup.amount) ?? 0
-            let participants = expenseBackup.participantIDs.compactMap { peopleByID[$0] }
+            var seenParticipantIDs = Set<UUID>()
+            let participants = expenseBackup.participantIDs.compactMap { id -> Person? in
+                guard seenParticipantIDs.insert(id).inserted else { return nil }
+                return peopleByID[id]
+            }
             let expense = Expense(
                 title: expenseBackup.title,
                 amount: amount,
@@ -197,29 +347,16 @@ enum SplitBackup {
             )
             expense.occasion = occasion
 
+            var seenShareIDs = Set<UUID>()
             for shareBackup in expenseBackup.shares {
-                guard let person = peopleByID[shareBackup.personID],
+                guard seenShareIDs.insert(shareBackup.personID).inserted,
+                      let person = peopleByID[shareBackup.personID],
                       let value = Decimal(string: shareBackup.value) else { continue }
                 expense.shares.append(ExpenseShare(person: person, value: value))
             }
 
             context.insert(expense)
         }
-
-        context.insert(occasion)
-        return occasion
-    }
-
-    // MARK: iCloud KVS (survives reinstall with same Apple ID)
-
-    private static func saveToiCloud(_ data: Data) {
-        NSUbiquitousKeyValueStore.default.set(data, forKey: iCloudKey)
-        NSUbiquitousKeyValueStore.default.synchronize()
-    }
-
-    private static func loadFromiCloud() -> Data? {
-        NSUbiquitousKeyValueStore.default.synchronize()
-        return NSUbiquitousKeyValueStore.default.data(forKey: iCloudKey)
     }
 
     // MARK: Keychain (often survives reinstall on the same device)

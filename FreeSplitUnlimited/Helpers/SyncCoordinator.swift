@@ -16,31 +16,74 @@ import SwiftData
 final class SyncCoordinator: ObservableObject {
     static let shared = SyncCoordinator()
 
-    /// CloudKit requires a paid Apple Developer Program membership + iCloud
-    /// entitlements. This project's signing team is a free/personal team, which
-    /// Apple blocks from using iCloud entirely — `CKContainer.default()` crashes
-    /// immediately (uncatchable) if the app has no iCloud entitlement at all.
-    /// Keep this false (and never touch `cloud`) until entitlements are restored.
+    /// CloudKit is fully stubbed out. Do not import CloudKit or construct CKContainer.
     private let cloudKitEnabled = false
-
-    let mesh = MeshSyncService.shared
-    /// `lazy` so this is only ever constructed — and only ever calls into
-    /// CloudKit — if `cloudKitEnabled` is flipped back on.
-    private lazy var cloud = CloudSyncService.shared
 
     private var context: ModelContext?
     private var pollTask: Task<Void, Never>?
+    private var didStart = false
 
     private init() {}
 
-    func start(context: ModelContext) {
+    /// Stores the SwiftData context without touching Multipeer radios.
+    /// Starting `MCPeerID` / `MCSession` during launch or a document-open can `brk`.
+    func attach(context: ModelContext) {
         self.context = context
-        mesh.start(context: context)
+    }
 
+    func start(context: ModelContext) {
+        attach(context: context)
+        startNearby()
+    }
+
+    /// Turns on nearby discovery. Safe to call more than once.
+    func startNearby() {
+        guard let context else { return }
+        didStart = true
+        MeshSyncService.shared.start(context: context)
+        startCloudIfNeeded()
+    }
+
+    /// Re-start nearby discovery when the app comes back to the foreground.
+    func resume() {
+        guard didStart else { return }
+        MeshSyncService.shared.resume()
+        startCloudIfNeeded()
+    }
+
+    /// Call right after any local edit is saved. Broadcasts to nearby peers immediately;
+    /// pushes to CloudKit too, but only if that's enabled (see `cloudKitEnabled`).
+    func notifyLocalChange() {
+        guard didStart else { return }
+        MeshSyncService.shared.broadcastLocalChanges()
+        guard cloudKitEnabled, let context else { return }
+        let occasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
+        guard !occasions.isEmpty else { return }
+        Task {
+            await CloudSyncService.shared.pushAll(occasions)
+        }
+    }
+
+    /// Manual nearby sync: start radios if needed, rediscover peers, push current splits.
+    func syncNow() {
+        startNearby()
+        MeshSyncService.shared.restartDiscovery()
         guard cloudKitEnabled else { return }
-        pollTask?.cancel()
+        Task {
+            await pullFromCloud()
+        }
+    }
+
+    func stopNearby() {
+        didStart = false
+        MeshSyncService.shared.stop()
+    }
+
+    private func startCloudIfNeeded() {
+        guard cloudKitEnabled else { return }
+        guard pollTask == nil else { return }
         pollTask = Task {
-            await cloud.refreshAvailability()
+            await CloudSyncService.shared.refreshAvailability()
             await pullFromCloud()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(20))
@@ -49,30 +92,9 @@ final class SyncCoordinator: ObservableObject {
         }
     }
 
-    /// Call right after any local edit is saved. Broadcasts to nearby peers immediately;
-    /// pushes to CloudKit too, but only if that's enabled (see `cloudKitEnabled`).
-    func notifyLocalChange() {
-        mesh.broadcastLocalChanges()
-        guard cloudKitEnabled, let context else { return }
-        let occasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
-        guard !occasions.isEmpty else { return }
-        Task {
-            await cloud.pushAll(occasions)
-        }
-    }
-
-    /// Manual "pull to refresh"-style trigger, e.g. from a toolbar button.
-    func syncNow() {
-        mesh.broadcastLocalChanges()
-        guard cloudKitEnabled else { return }
-        Task {
-            await pullFromCloud()
-        }
-    }
-
     private func pullFromCloud() async {
         guard let context else { return }
         let ids = ((try? context.fetch(FetchDescriptor<Occasion>())) ?? []).map(\.id)
-        await cloud.pull(ids: ids, into: context)
+        await CloudSyncService.shared.pull(ids: ids, into: context)
     }
 }

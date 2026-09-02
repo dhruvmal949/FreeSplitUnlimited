@@ -8,12 +8,27 @@
 			<key>CFBundleTypeName</key>
 			<string>Free Split Share</string>
 			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
+			<string>Viewer</string>
 			<key>LSHandlerRank</key>
 			<string>Owner</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>freesplit</string>
+			</array>
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>pramela.freesplitunlimited.split</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>JSON</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
 				<string>public.json</string>
 			</array>
 		</dict>
@@ -44,7 +59,9 @@
 		</dict>
 	</array>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<true/>
+	<false/>
+	<key>UISupportsDocumentBrowser</key>
+	<false/>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>NSBonjourServices</key>
@@ -53,8 +70,14 @@
 		<string>_freesplit-mesh._udp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Free Split uses your local network to sync splits directly with nearby friends' phones — no internet needed.</string>
+	<string>Free Split uses your local network to sync splits directly with nearby friends' phones — no internet or AirDrop needed.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Free Split uses Bluetooth to discover and sync splits with nearby friends' phones.</string>
+	<string>Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Free Split uses your contacts so you can add friends to a split. You can allow all contacts or only the ones you choose.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Free Split uses your photos so you can add a picture to a group.</string>
 </dict>
 </plist>

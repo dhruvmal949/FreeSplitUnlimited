@@ -6,7 +6,7 @@
 import SwiftUI
 import SwiftData
 
-private struct FriendDraft: Identifiable {
+struct FriendDraft: Identifiable {
     let id = UUID()
     var name = ""
     var email = ""
@@ -16,18 +16,20 @@ private struct FriendDraft: Identifiable {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var normalizedEmail: String {
-        FriendContactValidation.normalizedEmail(email)
-    }
-
-    var trimmedPhone: String {
-        FriendContactValidation.formatPhone(phone)
-    }
-
     var isComplete: Bool {
         !trimmedName.isEmpty
-            && FriendContactValidation.isValidEmail(normalizedEmail)
-            && FriendContactValidation.isValidPhone(trimmedPhone)
+    }
+
+    init(name: String = "", email: String = "", phone: String = "") {
+        self.name = name
+        self.email = email
+        self.phone = phone
+    }
+
+    init(contact: PickedContact) {
+        self.name = contact.name
+        self.email = contact.email
+        self.phone = contact.phone
     }
 }
 
@@ -37,7 +39,25 @@ struct AddOccasionView: View {
 
     @State private var name = ""
     @State private var note = ""
-    @State private var friends: [FriendDraft] = [FriendDraft(), FriendDraft()]
+    @State private var friends: [FriendDraft]
+    @State private var showingFriendPicker = false
+    @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
+
+    init(initialFriends: [FriendDraft] = []) {
+        let me = FriendDraft(contact: ContactDirectory.me())
+        var drafts = initialFriends.filter(\.isComplete)
+        if drafts.isEmpty {
+            drafts = [me]
+        } else if !drafts.contains(where: {
+            $0.trimmedName.localizedCaseInsensitiveCompare(me.trimmedName) == .orderedSame
+        }) {
+            drafts.insert(me, at: 0)
+        }
+        while drafts.count < 2 {
+            drafts.append(FriendDraft())
+        }
+        _friends = State(initialValue: drafts)
+    }
 
     private var canSave: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -52,37 +72,30 @@ struct AddOccasionView: View {
                     TextField("Note (optional)", text: $note)
                 }
 
-                ForEach(friends.indices, id: \.self) { index in
+                ForEach($friends) { $friend in
                     Section {
-                        TextField("Name", text: $friends[index].name)
+                        TextField("Name", text: $friend.name)
                             .textContentType(.name)
                             .textInputAutocapitalization(.words)
 
-                        TextField("Email", text: $friends[index].email)
-                            .keyboardType(.emailAddress)
-                            .textContentType(.emailAddress)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-
-                        TextField("555-123-4567", text: ContactActions.phoneBinding($friends[index].phone))
-                            .keyboardType(.phonePad)
-                            .textContentType(.telephoneNumber)
-
                         if friends.count > 2 {
                             Button("Remove Friend", role: .destructive) {
-                                friends.remove(at: index)
+                                friends.removeAll { $0.id == friend.id }
                             }
                         }
                     } header: {
-                        Text("Friend \(index + 1)")
-                    } footer: {
-                        if index == friends.count - 1 {
-                            Text("Type an email like name@email.com for each friend.")
-                        }
+                        Text("Friend \((friends.firstIndex(where: { $0.id == friend.id }) ?? 0) + 1)")
                     }
                 }
 
                 Section {
+                    Button {
+                        Task { await presentFriendPicker() }
+                    } label: {
+                        Label("Add Friends", systemImage: "magnifyingglass")
+                    }
+                    .disabled(showingFriendPicker)
+
                     Button {
                         friends.append(FriendDraft())
                     } label: {
@@ -107,6 +120,7 @@ struct AddOccasionView: View {
             }
             .freeSplitListStyle()
             .freeSplitBackground()
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("New Split")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -114,7 +128,55 @@ struct AddOccasionView: View {
                     Button("Cancel") { dismiss() }
                 }
             }
+            .sheet(isPresented: $showingFriendPicker) {
+                FriendSearchPicker(
+                    contactsAllowed: contactsAllowed,
+                    savedFriends: KnownFriendsStore.previouslyUsedFriends(from: modelContext),
+                    onPick: { contacts in
+                        add(contacts)
+                    },
+                    onContactsAccessGranted: {
+                        contactsAllowed = true
+                    }
+                )
+            }
         }
+    }
+
+    @MainActor
+    private func presentFriendPicker() async {
+        guard !showingFriendPicker else { return }
+        await ContactAuthorization.requestIfNeeded()
+        try? await Task.sleep(for: .milliseconds(250))
+        guard !showingFriendPicker else { return }
+        let allowed = ContactAuthorization.canUseSystemPicker
+        contactsAllowed = allowed
+        showingFriendPicker = true
+    }
+
+    private func add(_ contacts: [PickedContact]) {
+        var next: [FriendDraft] = []
+        for contact in contacts {
+            let draft = FriendDraft(contact: contact)
+            let alreadyAdded = next.contains {
+                $0.trimmedName.localizedCaseInsensitiveCompare(draft.trimmedName) == .orderedSame
+            }
+            if !alreadyAdded {
+                next.append(draft)
+            }
+        }
+        for existing in friends where existing.isComplete {
+            let alreadyAdded = next.contains {
+                $0.trimmedName.localizedCaseInsensitiveCompare(existing.trimmedName) == .orderedSame
+            }
+            if !alreadyAdded {
+                next.append(existing)
+            }
+        }
+        while next.count < 2 {
+            next.append(FriendDraft())
+        }
+        friends = next
     }
 
     private func save() {
@@ -127,8 +189,8 @@ struct AddOccasionView: View {
             .map {
                 Person(
                     name: $0.trimmedName,
-                    email: $0.normalizedEmail,
-                    phone: $0.trimmedPhone
+                    email: $0.email.trimmingCharacters(in: .whitespacesAndNewlines),
+                    phone: $0.phone.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
             }
 

@@ -74,6 +74,114 @@ enum BalanceCalculator {
 
         return results
     }
+
+    /// 1:1 Splitwise-style balances between Me and each other person, across groups.
+    static func friendSummaries(from occasions: [Occasion], myNames: [String] = ["Me"]) -> [FriendSummary] {
+        func isMe(_ name: String) -> Bool {
+            myNames.contains { $0.localizedCaseInsensitiveCompare(name) == .orderedSame }
+        }
+
+        var net: [String: Decimal] = [:]
+        var displayName: [String: String] = [:]
+        var occasionIDs: [String: [UUID]] = [:]
+        var occasionNames: [String: [String]] = [:]
+
+        for occasion in occasions {
+            for member in occasion.uniqueMembers where !isMe(member.name) {
+                let key = member.name.lowercased()
+                displayName[key] = member.name
+                net[key, default: 0] += 0
+                if occasionIDs[key]?.contains(occasion.id) != true {
+                    occasionIDs[key, default: []].append(occasion.id)
+                    occasionNames[key, default: []].append(occasion.name)
+                }
+            }
+
+            for settlement in settlements(for: occasion) {
+                if isMe(settlement.from.name), !isMe(settlement.to.name) {
+                    let key = settlement.to.name.lowercased()
+                    displayName[key] = settlement.to.name
+                    net[key, default: 0] -= settlement.amount
+                } else if isMe(settlement.to.name), !isMe(settlement.from.name) {
+                    let key = settlement.from.name.lowercased()
+                    displayName[key] = settlement.from.name
+                    net[key, default: 0] += settlement.amount
+                }
+            }
+        }
+
+        return displayName.keys.map { key in
+            FriendSummary(
+                id: key,
+                name: displayName[key] ?? key,
+                net: net[key] ?? 0,
+                occasionIDs: occasionIDs[key] ?? [],
+                occasionNames: occasionNames[key] ?? []
+            )
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Positive = others owe you in this group; negative = you owe others.
+    static func myNet(in occasion: Occasion, myNames: [String] = ["Me"]) -> Decimal {
+        balances(for: occasion).first { balance in
+            myNames.contains { $0.localizedCaseInsensitiveCompare(balance.person.name) == .orderedSame }
+        }?.net ?? 0
+    }
+
+    static func activity(from occasions: [Occasion]) -> [ActivityEvent] {
+        var items: [ActivityEvent] = []
+        for occasion in occasions {
+            items.append(
+                ActivityEvent(
+                    id: "created-\(occasion.id.uuidString)",
+                    date: occasion.createdAt,
+                    kind: .splitCreated,
+                    title: "Split created",
+                    subtitle: occasion.name,
+                    occasionID: occasion.id
+                )
+            )
+            var seenExpenseIDs = Set<UUID>()
+            for expense in occasion.expenses where seenExpenseIDs.insert(expense.id).inserted {
+                let payer = expense.paidBy?.name ?? "Someone"
+                items.append(
+                    ActivityEvent(
+                        id: "paid-\(expense.id.uuidString)",
+                        date: expense.date,
+                        kind: .amountPaid,
+                        title: "\(payer) paid \(CurrencyFormat.string(from: expense.amount))",
+                        subtitle: "\(expense.title) · \(occasion.name)",
+                        occasionID: occasion.id
+                    )
+                )
+            }
+        }
+        return items.sorted { $0.date > $1.date }
+    }
+}
+
+struct FriendSummary: Identifiable {
+    let id: String
+    let name: String
+    /// Positive = they owe you; negative = you owe them.
+    let net: Decimal
+    let occasionIDs: [UUID]
+    let occasionNames: [String]
+}
+
+struct ActivityEvent: Identifiable {
+    enum Kind {
+        case splitCreated
+        case amountPaid
+    }
+
+    let id: String
+    let date: Date
+    let kind: Kind
+    let title: String
+    let subtitle: String
+    let occasionID: UUID
 }
 
 enum CurrencyFormat {

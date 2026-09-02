@@ -2,16 +2,15 @@
 //  MeshSyncService.swift
 //  FreeSplitUnlimited
 //
-//  Bitchat-style peer-to-peer sync: phones discover each other directly over
-//  Bluetooth / Wi-Fi (no server, no internet needed) and gossip split data.
-//  Every connected phone also relays what it knows to the next phone it meets,
-//  so a change can hop from phone to phone without any two "ends" ever
-//  connecting directly — the same store-and-forward idea Bitchat uses for chat.
+//  Peer-to-peer sync: phones discover each other directly over Bluetooth / Wi-Fi
+//  (no server, no internet, no AirDrop) and gossip split data. Every connected
+//  phone also relays what it knows, so a change can hop from phone to phone.
 //
 
 import Foundation
 import MultipeerConnectivity
 import SwiftData
+import SwiftUI
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -65,77 +64,214 @@ final class MeshSyncService: NSObject, ObservableObject {
     static let shared = MeshSyncService()
 
     /// Bonjour service type: lowercase letters/numbers/hyphens, 1–15 chars.
-    private let serviceType = "freesplit-mesh"
+    private static let serviceType = "freesplit-mesh"
+    private let peerToken: String
+    /// Created in `start()`, not `init()`. `MCPeerID` / radios during the first
+    /// SwiftUI frame of a document-open launch can `brk`.
+    private var myPeerID: MCPeerID?
+    nonisolated(unsafe) private var session: MCSession?
+    private var advertiser: MCNearbyServiceAdvertiser?
+    private var browser: MCNearbyServiceBrowser?
 
     @Published private(set) var connectedPeerCount = 0
+    @Published private(set) var connectedPeerNames: [String] = []
+    @Published private(set) var isRunning = false
+    @Published private(set) var isConnecting = false
+    @Published private(set) var lastError: String?
+
+    var statusTitle: String {
+        if connectedPeerCount > 0 {
+            return connectedPeerCount == 1
+                ? "1 phone nearby"
+                : "\(connectedPeerCount) phones nearby"
+        }
+        if isConnecting {
+            return "Connecting to a nearby phone"
+        }
+        return isRunning ? "Looking for nearby phones" : "Nearby sync off"
+    }
+
+    var statusDetail: String {
+        if let lastError, connectedPeerCount == 0 {
+            return lastError
+        }
+        if connectedPeerCount > 0 {
+            let names = connectedPeerNames.joined(separator: ", ")
+            if names.isEmpty {
+                return "Splits sync automatically — no internet or AirDrop needed."
+            }
+            return "Connected to \(names). Splits sync automatically."
+        }
+        if isConnecting {
+            return "Keep both phones unlocked with Free Split open."
+        }
+        return "Keep Bluetooth and Wi‑Fi on. Open Free Split on both phones."
+    }
 
     private var context: ModelContext?
-    private let myPeerID: MCPeerID
-    /// Optional encryption is more reliable offline over Bluetooth than `.required`.
-    private lazy var session: MCSession = {
-        let session = MCSession(peer: myPeerID, securityIdentity: nil, encryptionPreference: .optional)
-        session.delegate = self
-        return session
-    }()
-    private lazy var advertiser = MCNearbyServiceAdvertiser(
-        peer: myPeerID,
-        discoveryInfo: ["app": "freesplit"],
-        serviceType: serviceType
-    )
-    private lazy var browser = MCNearbyServiceBrowser(peer: myPeerID, serviceType: serviceType)
     private var restartTask: Task<Void, Never>?
+    private var pendingInvites = Set<String>()
+    private var connectingKeys = Set<String>()
 
     private override init() {
-        let name = Self.persistedDisplayName()
-        self.myPeerID = MCPeerID(displayName: name)
+        self.peerToken = Self.persistedPeerToken()
         super.init()
+    }
+
+    private func prepareRadiosIfNeeded() {
+        guard session == nil else { return }
+        let peerID = myPeerID ?? MCPeerID(displayName: Self.persistedDisplayName())
+        myPeerID = peerID
+        let session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .optional)
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: peerID,
+            discoveryInfo: ["app": "freesplit", "id": peerToken],
+            serviceType: Self.serviceType
+        )
+        let browser = MCNearbyServiceBrowser(peer: peerID, serviceType: Self.serviceType)
+        session.delegate = self
         advertiser.delegate = self
         browser.delegate = self
+        self.session = session
+        self.advertiser = advertiser
+        self.browser = browser
     }
 
     func start(context: ModelContext) {
         self.context = context
-        advertiser.startAdvertisingPeer()
-        browser.startBrowsingForPeers()
+        lastError = nil
+        prepareRadiosIfNeeded()
+        isRunning = true
+        startDiscovery()
+        ensureRestartLoop()
+    }
 
-        // Multipeer discovery can stall when radios sleep; gently restart browse/advertise.
-        restartTask?.cancel()
-        restartTask = Task { @MainActor in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(45))
-                guard !Task.isCancelled else { return }
-                if self.session.connectedPeers.isEmpty {
-                    self.browser.stopBrowsingForPeers()
-                    self.advertiser.stopAdvertisingPeer()
-                    self.advertiser.startAdvertisingPeer()
-                    self.browser.startBrowsingForPeers()
-                }
-            }
-        }
+    /// Call when the app returns to the foreground so radios start advertising again.
+    func resume() {
+        guard context != nil else { return }
+        prepareRadiosIfNeeded()
+        isRunning = true
+        startDiscovery()
+        ensureRestartLoop()
     }
 
     func stop() {
         restartTask?.cancel()
         restartTask = nil
-        advertiser.stopAdvertisingPeer()
-        browser.stopBrowsingForPeers()
-        session.disconnect()
+        isRunning = false
+        isConnecting = false
+        lastError = nil
+        advertiser?.stopAdvertisingPeer()
+        browser?.stopBrowsingForPeers()
+        session?.disconnect()
+        pendingInvites.removeAll()
+        connectingKeys.removeAll()
+        refreshPeerState()
+    }
+
+    /// Re-advertise/browse and push current splits to anyone already connected.
+    func restartDiscovery() {
+        lastError = nil
+        let idle = (session?.connectedPeers.isEmpty ?? true) && connectingKeys.isEmpty
+        if idle {
+            pendingInvites.removeAll()
+            bounceDiscovery()
+        } else {
+            startDiscovery()
+        }
+        broadcastLocalChanges()
     }
 
     /// Call after any local save so already-connected peers get the update immediately,
     /// without waiting for the next manifest exchange.
     func broadcastLocalChanges() {
-        guard !session.connectedPeers.isEmpty, let context else { return }
+        guard let session, !session.connectedPeers.isEmpty, let context else { return }
         let occasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
         guard !occasions.isEmpty else { return }
         let backups = occasions.map(SplitBackup.exportOccasion)
         send(.occasions(backups), to: session.connectedPeers)
     }
 
+    // MARK: Discovery
+
+    private func startDiscovery() {
+        prepareRadiosIfNeeded()
+        advertiser?.startAdvertisingPeer()
+        browser?.startBrowsingForPeers()
+    }
+
+    /// Stop/start radios only when nothing is mid-handshake. Bouncing while
+    /// `.connecting` cancels the invite and the phones never pair.
+    private func bounceDiscovery() {
+        guard isRunning else { return }
+        advertiser?.stopAdvertisingPeer()
+        browser?.stopBrowsingForPeers()
+        startDiscovery()
+    }
+
+    private func ensureRestartLoop() {
+        guard restartTask == nil else { return }
+        restartTask = Task { @MainActor in
+            var ticks = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(8))
+                guard !Task.isCancelled, self.isRunning else { return }
+                ticks += 1
+                let idle = (self.session?.connectedPeers.isEmpty ?? true)
+                    && self.connectingKeys.isEmpty
+                guard idle else { continue }
+                if ticks % 6 == 0 {
+                    self.pendingInvites.removeAll()
+                    self.bounceDiscovery()
+                } else {
+                    self.startDiscovery()
+                }
+            }
+        }
+    }
+
+    private func handleFoundPeer(_ peerID: MCPeerID, info: [String: String]?) {
+        let key = peerID.displayName
+        guard session?.connectedPeers.contains(peerID) == false else { return }
+        guard pendingInvites.contains(key) == false else { return }
+        guard shouldInvite(peerID, info: info) else { return }
+
+        pendingInvites.insert(key)
+        connectingKeys.insert(key)
+        isConnecting = true
+        lastError = nil
+        guard let session else {
+            pendingInvites.remove(key)
+            connectingKeys.remove(key)
+            isConnecting = !connectingKeys.isEmpty
+            return
+        }
+        browser?.invitePeer(peerID, to: session, withContext: nil, timeout: 45)
+    }
+
+    /// Exactly one phone must invite. Comparing a UUID token to "iPhone" made
+    /// both sides skip, so two phones never connected.
+    private func shouldInvite(_ peerID: MCPeerID, info: [String: String]?) -> Bool {
+        if let theirToken = info?["id"], !theirToken.isEmpty {
+            return peerToken > theirToken
+        }
+        let myName = myPeerID?.displayName ?? ""
+        if myName != peerID.displayName {
+            return myName > peerID.displayName
+        }
+        return true
+    }
+
+    private func refreshPeerState() {
+        connectedPeerCount = session?.connectedPeers.count ?? 0
+        connectedPeerNames = session?.connectedPeers.map(\.displayName) ?? []
+        isConnecting = !connectingKeys.isEmpty && connectedPeerCount == 0
+    }
+
     // MARK: Messaging
 
     private func send(_ message: MeshMessage, to peers: [MCPeerID]) {
-        guard !peers.isEmpty else { return }
+        guard let session, !peers.isEmpty else { return }
         do {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -161,7 +297,10 @@ final class MeshSyncService: NSObject, ObservableObject {
         switch message {
         case .manifest(let peerEntries):
             let localOccasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
-            let localByID = Dictionary(uniqueKeysWithValues: localOccasions.map { ($0.id, $0) })
+            var localByID: [UUID: Occasion] = [:]
+            for occasion in localOccasions where localByID[occasion.id] == nil {
+                localByID[occasion.id] = occasion
+            }
 
             var idsWeNeed: [UUID] = []
             for entry in peerEntries {
@@ -177,7 +316,10 @@ final class MeshSyncService: NSObject, ObservableObject {
                 send(.request(idsWeNeed), to: [peer])
             }
 
-            let peerByID = Dictionary(uniqueKeysWithValues: peerEntries.map { ($0.id, $0) })
+            var peerByID: [UUID: MeshManifestEntry] = [:]
+            for entry in peerEntries where peerByID[entry.id] == nil {
+                peerByID[entry.id] = entry
+            }
             let toSend = localOccasions.filter { occasion in
                 guard let peerEntry = peerByID[occasion.id] else { return true }
                 return occasion.updatedAt > peerEntry.updatedAt
@@ -203,8 +345,7 @@ final class MeshSyncService: NSObject, ObservableObject {
 
             NotificationCenter.default.post(name: .freeSplitDidImport, object: appliedIDs.first)
 
-            // Relay to every other connected peer so the change keeps hopping (mesh flood).
-            let otherPeers = session.connectedPeers.filter { $0 != peer }
+            let otherPeers = session?.connectedPeers.filter { $0 != peer } ?? []
             if !otherPeers.isEmpty {
                 send(.occasions(backups), to: otherPeers)
             }
@@ -212,18 +353,27 @@ final class MeshSyncService: NSObject, ObservableObject {
     }
 
     private static func persistedDisplayName() -> String {
-        let key = "freeSplit.mesh.displayName"
-        if let saved = UserDefaults.standard.string(forKey: key) {
+        let suffix = String(persistedPeerToken().prefix(4))
+        #if canImport(UIKit)
+        let device = UIDevice.current.name
+        #else
+        let device = "Free Split"
+        #endif
+        let base = String(device.prefix(50)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeBase = base.isEmpty ? "Free Split" : base
+        let name = String("\(safeBase) \(suffix)".prefix(63))
+        UserDefaults.standard.set(name, forKey: "freeSplit.mesh.displayName")
+        return name
+    }
+
+    private static func persistedPeerToken() -> String {
+        let key = "freeSplit.mesh.peerToken"
+        if let saved = UserDefaults.standard.string(forKey: key), !saved.isEmpty {
             return saved
         }
-        #if canImport(UIKit)
-        let base = UIDevice.current.name
-        #else
-        let base = "Free Split User"
-        #endif
-        let name = String(base.prefix(60))
-        UserDefaults.standard.set(name, forKey: key)
-        return name
+        let token = UUID().uuidString
+        UserDefaults.standard.set(token, forKey: key)
+        return token
     }
 }
 
@@ -232,9 +382,22 @@ final class MeshSyncService: NSObject, ObservableObject {
 extension MeshSyncService: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         Task { @MainActor in
-            self.connectedPeerCount = session.connectedPeers.count
-            if state == .connected {
+            switch state {
+            case .connected:
+                self.pendingInvites.remove(peerID.displayName)
+                self.connectingKeys.remove(peerID.displayName)
+                self.lastError = nil
+                self.refreshPeerState()
                 self.sendManifest(to: peerID)
+            case .connecting:
+                self.connectingKeys.insert(peerID.displayName)
+                self.refreshPeerState()
+            case .notConnected:
+                self.pendingInvites.remove(peerID.displayName)
+                self.connectingKeys.remove(peerID.displayName)
+                self.refreshPeerState()
+            @unknown default:
+                self.refreshPeerState()
             }
         }
     }
@@ -262,13 +425,20 @@ extension MeshSyncService: MCNearbyServiceAdvertiserDelegate {
         withContext context: Data?,
         invitationHandler: @escaping (Bool, MCSession?) -> Void
     ) {
-        Task { @MainActor in
-            invitationHandler(true, self.session)
-        }
+        // Accept immediately on this callback thread. Hopping to MainActor first
+        // is a common reason Multipeer invitations expire before they connect.
+        let session = self.session
+        invitationHandler(session != nil, session)
     }
 
     nonisolated func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
         print("Mesh advertising failed: \(error.localizedDescription)")
+        Task { @MainActor in
+            self.lastError = "Couldn't start nearby sync. Allow Local Network for Free Split in iPhone Settings."
+            try? await Task.sleep(for: .seconds(3))
+            guard self.isRunning else { return }
+            self.startDiscovery()
+        }
     }
 }
 
@@ -277,16 +447,66 @@ extension MeshSyncService: MCNearbyServiceAdvertiserDelegate {
 extension MeshSyncService: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
         Task { @MainActor in
-            guard self.session.connectedPeers.contains(peerID) == false else { return }
-            // Skip inviting ourselves / same display name loops when testing two sims is impossible;
-            // on two real devices, different phone names keep this safe.
-            browser.invitePeer(peerID, to: self.session, withContext: nil, timeout: 20)
+            self.handleFoundPeer(peerID, info: info)
         }
     }
 
-    nonisolated func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {}
+    nonisolated func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
+        Task { @MainActor in
+            self.pendingInvites.remove(peerID.displayName)
+            self.connectingKeys.remove(peerID.displayName)
+            self.refreshPeerState()
+        }
+    }
 
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
         print("Mesh browsing failed: \(error.localizedDescription)")
+        Task { @MainActor in
+            self.lastError = "Couldn't find nearby phones. Allow Local Network for Free Split in iPhone Settings."
+            try? await Task.sleep(for: .seconds(3))
+            guard self.isRunning else { return }
+            self.startDiscovery()
+        }
+    }
+}
+
+// MARK: - Nearby status UI
+
+struct NearbySyncBanner: View {
+    @ObservedObject var mesh: MeshSyncService
+    var onSync: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: mesh.connectedPeerCount > 0
+                      ? "dot.radiowaves.left.and.right"
+                      : "antenna.radiowaves.left.and.right")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AppTheme.teal)
+                    .symbolEffect(.variableColor.iterative, isActive: mesh.connectedPeerCount == 0 && mesh.isRunning)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mesh.statusTitle)
+                        .font(.subheadline.weight(.semibold))
+                    Text(mesh.statusDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+            }
+
+            Button(action: onSync) {
+                Text(mesh.connectedPeerCount > 0 ? "Sync with Nearby Phones" : "Find Nearby Phones")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(AppTheme.teal)
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }

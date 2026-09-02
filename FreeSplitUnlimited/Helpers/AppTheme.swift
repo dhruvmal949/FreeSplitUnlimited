@@ -15,6 +15,10 @@ enum AppTheme {
     static let seaFoam = Color(red: 150 / 255, green: 210 / 255, blue: 198 / 255)
     static let paleGold = Color(red: 240 / 255, green: 220 / 255, blue: 170 / 255)
 
+    /// Height of the custom Friends / Groups / Notifications / Settings bar,
+    /// not counting the home indicator.
+    static let mainTabBarHeight: CGFloat = 56
+
     static var backgroundGradient: LinearGradient {
         LinearGradient(
             colors: [
@@ -163,5 +167,63 @@ extension View {
         self
             .scrollContentBackground(.hidden)
             .listStyle(.insetGrouped)
+            .contentMargins(.bottom, 12, for: .scrollContent)
+    }
+
+    /// Pushed screens do not inherit the tab bar’s `safeAreaInset`, so lists
+    /// extend under it and cannot scroll the last rows into view.
+    func avoidsMainTabBar() -> some View {
+        self.safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear
+                .frame(height: AppTheme.mainTabBarHeight)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+struct NoneState: View {
+    var image: String
+    var message: String
+
+    var body: some View {
+        ContentUnavailableView("None", systemImage: image, description: Text(message))
+    }
+}
+
+private struct PopToHomeKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+
+extension EnvironmentValues {
+    var popToHome: () -> Void {
+        get { self[PopToHomeKey.self] }
+        set { self[PopToHomeKey.self] = newValue }
+    }
+}
+
+struct HomeBackButton: View {
+    @Environment(\.popToHome) private var popToHome
+
+    var body: some View {
+        Button(action: popToHome) {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left")
+                    .font(.body.weight(.semibold))
+                Text("Home")
+            }
+        }
+        .accessibilityLabel("Back to Home")
+    }
+}
+
+extension View {
+    func homeBackButton() -> some View {
+        self
+            .navigationBarBackButtonHidden(true)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    HomeBackButton()
+                }
+            }
     }
 }

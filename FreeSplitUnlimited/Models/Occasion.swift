@@ -8,28 +8,46 @@ import SwiftData
 
 @Model
 final class Occasion {
-    var id: UUID
-    var name: String
-    var note: String
-    var createdAt: Date
+    /// Defaults are required so SwiftData can load older stores without trapping (`brk`).
+    var id: UUID = UUID()
+    var name: String = ""
+    var note: String = ""
+    var createdAt: Date = Date.now
     /// Bumped on every local change; used to resolve conflicts when merging data from other phones.
     var updatedAt: Date = Date.now
     /// Soft-delete flag so deletions propagate to other phones instead of being silently resurrected.
     var isDeleted: Bool = false
+    /// Stored as a string so older SwiftData stores can load without trapping.
+    var groupType: String = GroupKind.other.rawValue
+    var coverImageData: Data? = nil
     @Relationship(deleteRule: .cascade, inverse: \Person.occasion)
-    var members: [Person]
+    var members: [Person] = []
     @Relationship(deleteRule: .cascade, inverse: \Expense.occasion)
-    var expenses: [Expense]
+    var expenses: [Expense] = []
 
-    init(name: String, note: String = "", createdAt: Date = .now, updatedAt: Date? = nil, id: UUID = UUID()) {
+    init(
+        name: String,
+        note: String = "",
+        createdAt: Date = .now,
+        updatedAt: Date? = nil,
+        id: UUID = UUID(),
+        groupType: String = GroupKind.other.rawValue,
+        coverImageData: Data? = nil
+    ) {
         self.id = id
         self.name = name
         self.note = note
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
         self.isDeleted = false
+        self.groupType = groupType
+        self.coverImageData = coverImageData
         self.members = []
         self.expenses = []
+    }
+
+    var kind: GroupKind {
+        GroupKind.resolve(groupType)
     }
 
     /// Marks this split as changed so sync (mesh + cloud) knows to propagate it.
@@ -68,5 +86,36 @@ final class Occasion {
             uniqueExpenses.append(expense)
         }
         expenses = uniqueExpenses
+    }
+}
+
+enum GroupKind: String, CaseIterable, Identifiable {
+    case trip
+    case home
+    case party
+    case other
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .trip: return "Trip"
+        case .home: return "Home"
+        case .party: return "Party"
+        case .other: return "Other"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .trip: return "suitcase.fill"
+        case .home: return "house.fill"
+        case .party: return "party.popper.fill"
+        case .other: return "square.grid.2x2.fill"
+        }
+    }
+
+    static func resolve(_ raw: String) -> GroupKind {
+        GroupKind(rawValue: raw) ?? .other
     }
 }

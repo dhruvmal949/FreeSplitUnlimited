@@ -8,9 +8,10 @@ import SwiftData
 
 @Model
 final class ExpenseShare {
-    var id: UUID
+    /// Defaults are required so SwiftData can load older stores without trapping (`brk`).
+    var id: UUID = UUID()
     /// Percentage (0–100) or number of parts, depending on the expense split method.
-    var value: Decimal
+    var value: Decimal = 0
     var person: Person?
     var expense: Expense?
 

@@ -85,6 +85,17 @@ struct AddExpenseView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    HStack {
+                        Text("Group")
+                        Spacer()
+                        Text(occasion.name)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+
                 Section("Expense") {
                     TextField("What was it? (e.g. Dinner)", text: $title)
                     TextField("Amount (e.g. 55 or $55)", text: $amountText)
@@ -162,15 +173,25 @@ struct AddExpenseView: View {
                     .foregroundStyle(.white)
                 }
             }
-            .navigationTitle(isEditing ? "Edit Expense" : "Add Expense")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text(isEditing ? "Edit Expense" : "Add Expense")
+                            .font(.headline)
+                        Text(occasion.name)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
             }
             .freeSplitListStyle()
             .freeSplitBackground()
+            .scrollDismissesKeyboard(.interactively)
             .onAppear {
                 loadExistingIfNeeded()
             }

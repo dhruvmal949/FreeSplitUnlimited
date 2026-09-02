@@ -15,6 +15,7 @@ extension ModelContext {
                 try save()
             }
             SplitBackup.save(from: self)
+            KnownFriendsStore.remember(from: self)
             SyncCoordinator.shared.notifyLocalChange()
         } catch {
             print("Failed to save Free Split data: \(error)")

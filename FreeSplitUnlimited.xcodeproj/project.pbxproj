@@ -175,13 +175,19 @@
 				TargetAttributes = {
 					7DB3EB84302416CD00E19DDB = {
 						CreatedOnToolsVersion = 16.2;
+						DevelopmentTeam = YS34V6QGC5;
+						ProvisioningStyle = Automatic;
 					};
 					7DB3EB96302416D200E19DDB = {
 						CreatedOnToolsVersion = 16.2;
+						DevelopmentTeam = YS34V6QGC5;
+						ProvisioningStyle = Automatic;
 						TestTargetID = 7DB3EB84302416CD00E19DDB;
 					};
 					7DB3EBA0302416D200E19DDB = {
 						CreatedOnToolsVersion = 16.2;
+						DevelopmentTeam = YS34V6QGC5;
+						ProvisioningStyle = Automatic;
 						TestTargetID = 7DB3EB84302416CD00E19DDB;
 					};
 				};
@@ -393,6 +399,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = FreeSplitUnlimited/FreeSplitUnlimited.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"FreeSplitUnlimited/Preview Content\"";
@@ -400,7 +409,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = FreeSplitInfo.plist;
-				INFOPLIST_KEY_LSApplicationQueriesSchemes = "mailto tel sms";
+				INFOPLIST_KEY_NSContactsUsageDescription = "Free Split uses your contacts so you can add friends to a split. You can allow all contacts or only the ones you choose.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Free Split uses your local network to sync splits directly with nearby friends' phones — no internet or AirDrop needed.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -424,6 +434,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = FreeSplitUnlimited/FreeSplitUnlimited.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"FreeSplitUnlimited/Preview Content\"";
@@ -431,7 +444,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = FreeSplitInfo.plist;
-				INFOPLIST_KEY_LSApplicationQueriesSchemes = "mailto tel sms";
+				INFOPLIST_KEY_NSContactsUsageDescription = "Free Split uses your contacts so you can add friends to a split. You can allow all contacts or only the ones you choose.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Free Split uses your local network to sync splits directly with nearby friends' phones — no internet or AirDrop needed.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -454,8 +468,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YS34V6QGC5;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
 				MARKETING_VERSION = 1.0;
@@ -472,8 +489,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YS34V6QGC5;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.2;
 				MARKETING_VERSION = 1.0;
@@ -489,8 +509,11 @@
 		7DB3EBB2302416D200E19DDB /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YS34V6QGC5;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = pramela.FreeSplitUnlimitedUITests;
@@ -505,8 +528,11 @@
 		7DB3EBB3302416D200E19DDB /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YS34V6QGC5;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = pramela.FreeSplitUnlimitedUITests;

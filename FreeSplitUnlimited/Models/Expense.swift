@@ -8,16 +8,17 @@ import SwiftData
 
 @Model
 final class Expense {
-    var id: UUID
-    var title: String
-    var amount: Decimal
-    var date: Date
-    var splitMethodRaw: String
+    /// Defaults are required so SwiftData can load older stores without trapping (`brk`).
+    var id: UUID = UUID()
+    var title: String = ""
+    var amount: Decimal = 0
+    var date: Date = Date.now
+    var splitMethodRaw: String = SplitMethod.equal.rawValue
     var occasion: Occasion?
     var paidBy: Person?
-    var participants: [Person]
+    var participants: [Person] = []
     @Relationship(deleteRule: .cascade, inverse: \ExpenseShare.expense)
-    var shares: [ExpenseShare]
+    var shares: [ExpenseShare] = []
 
     var splitMethod: SplitMethod {
         get { SplitMethod(rawValue: splitMethodRaw) ?? .equal }
