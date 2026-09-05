@@ -46,7 +46,7 @@ struct SettingsView: View {
                             openURL(url)
                         }
                     } label: {
-                        Label("Open iPhone Settings", systemImage: "gear")
+                        Label("Setting", systemImage: "gear")
                     }
                 } header: {
                     Text("Contacts")

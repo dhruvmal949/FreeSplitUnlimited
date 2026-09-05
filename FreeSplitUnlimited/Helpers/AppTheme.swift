@@ -14,6 +14,16 @@ enum AppTheme {
     static let softSky = Color(red: 210 / 255, green: 232 / 255, blue: 240 / 255)
     static let seaFoam = Color(red: 150 / 255, green: 210 / 255, blue: 198 / 255)
     static let paleGold = Color(red: 240 / 255, green: 220 / 255, blue: 170 / 255)
+    /// Money you still need to pay.
+    static let youOwe = Color(red: 227 / 255, green: 56 / 255, blue: 53 / 255)
+    /// Money others still need to pay you.
+    static let youAreOwed = Color(red: 22 / 255, green: 148 / 255, blue: 74 / 255)
+
+    static func balanceColor(for net: Decimal) -> Color {
+        if net > 0 { return youAreOwed }
+        if net < 0 { return youOwe }
+        return .secondary
+    }
 
     /// Height of the custom Friends / Groups / Notifications / Settings bar,
     /// not counting the home indicator.

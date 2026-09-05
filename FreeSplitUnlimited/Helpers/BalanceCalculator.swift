@@ -37,7 +37,7 @@ enum BalanceCalculator {
         }
 
         return members
-            .map { PersonBalance(id: $0.id, person: $0, net: netByID[$0.id] ?? 0) }
+            .map { PersonBalance(id: $0.id, person: $0, net: MoneySplit.cents(netByID[$0.id] ?? 0)) }
             .sorted { $0.person.name.localizedCaseInsensitiveCompare($1.person.name) == .orderedAscending }
     }
 
@@ -64,7 +64,7 @@ enum BalanceCalculator {
         while i < debtors.count && j < creditors.count {
             let pay = min(debtors[i].1, creditors[j].1)
             if pay > 0 {
-                results.append(Settlement(from: debtors[i].0, to: creditors[j].0, amount: pay))
+                results.append(Settlement(from: debtors[i].0, to: creditors[j].0, amount: MoneySplit.cents(pay)))
             }
             debtors[i].1 -= pay
             creditors[j].1 -= pay

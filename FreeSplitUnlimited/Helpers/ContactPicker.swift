@@ -14,6 +14,7 @@ enum ContactAuthorization {
     /// First tap shows Apple's popup: Full Access, Select Contacts (limited), or Don't Allow.
     @MainActor
     static func requestIfNeeded() async {
+        guard !AppLaunchFlags.isUITesting else { return }
         let status = CNContactStore.authorizationStatus(for: .contacts)
         guard status == .notDetermined else { return }
         do {
@@ -123,6 +124,7 @@ struct FriendSearchBar: View {
                 .textInputAutocapitalization(.words)
                 .autocorrectionDisabled()
                 .focused(isFocused)
+                .accessibilityIdentifier("friendSearchField")
             if !query.isEmpty {
                 Button {
                     query = ""
@@ -146,6 +148,8 @@ struct FriendSearchBar: View {
 struct FriendSearchPicker: View {
     let contactsAllowed: Bool
     let savedFriends: [PickedContact]
+    /// `nil` means unlimited extra people. `1` is used when creating a one-to-one split.
+    var selectionLimit: Int?
     var onPick: ([PickedContact]) -> Void
     var onContactsAccessGranted: () -> Void = {}
 
@@ -156,14 +160,25 @@ struct FriendSearchPicker: View {
     @State private var usingContacts: Bool
     @FocusState private var searchFocused: Bool
 
+    private var otherSelectedCount: Int {
+        selected.filter { !$0.isMe }.count
+    }
+
+    private var canAddMore: Bool {
+        guard let selectionLimit else { return true }
+        return otherSelectedCount < selectionLimit
+    }
+
     init(
         contactsAllowed: Bool,
         savedFriends: [PickedContact],
+        selectionLimit: Int? = nil,
         onPick: @escaping ([PickedContact]) -> Void,
         onContactsAccessGranted: @escaping () -> Void = {}
     ) {
         self.contactsAllowed = contactsAllowed
         self.savedFriends = savedFriends
+        self.selectionLimit = selectionLimit
         self.onPick = onPick
         self.onContactsAccessGranted = onContactsAccessGranted
         _usingContacts = State(initialValue: contactsAllowed)
@@ -171,6 +186,25 @@ struct FriendSearchPicker: View {
 
     private var placeholder: String {
         usingContacts ? "Search contacts" : "Search saved friends"
+    }
+
+    private var typedNameToAdd: String? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 1 else { return nil }
+        guard trimmed.localizedCaseInsensitiveCompare("Me") != .orderedSame else { return nil }
+        let alreadySelected = selected.contains {
+            $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+        }
+        return alreadySelected ? nil : trimmed
+    }
+
+    private func addTypedName(_ name: String) {
+        guard canAddMore else { return }
+        if selectionLimit == 1 {
+            selected.removeAll { !$0.isMe }
+        }
+        selected.append(PickedContact(name: name))
+        query = ""
     }
 
     private var results: [PickedContact] {
@@ -218,6 +252,18 @@ struct FriendSearchPicker: View {
                         }
                     }
 
+                    if let typedName = typedNameToAdd {
+                        Section {
+                            Button {
+                                addTypedName(typedName)
+                            } label: {
+                                Label("Add \(typedName)", systemImage: "plus.circle.fill")
+                            }
+                            .disabled(!canAddMore)
+                            .accessibilityIdentifier("addTypedName")
+                        }
+                    }
+
                     Section(usingContacts ? "Contacts" : "Saved friends") {
                         if results.isEmpty {
                             Text(emptyResultsText)
@@ -225,9 +271,14 @@ struct FriendSearchPicker: View {
                         } else {
                             ForEach(results) { friend in
                                 friendRow(friend, isSelected: false) {
+                                    guard canAddMore else { return }
+                                    if selectionLimit == 1 {
+                                        selected.removeAll { !$0.isMe }
+                                    }
                                     selected.append(friend)
                                     query = ""
                                 }
+                                .disabled(!canAddMore)
                             }
                         }
                     }
@@ -254,7 +305,7 @@ struct FriendSearchPicker: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .freeSplitBackground()
-            .navigationTitle("Add Friends")
+            .navigationTitle(selectionLimit == 1 ? "Add Friend" : "Add Friends")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -265,7 +316,8 @@ struct FriendSearchPicker: View {
                         onPick(selected)
                         dismiss()
                     }
-                    .disabled(selected.isEmpty)
+                    .disabled(otherSelectedCount == 0)
+                    .accessibilityIdentifier("confirmAddFriends")
                 }
             }
             .onAppear {

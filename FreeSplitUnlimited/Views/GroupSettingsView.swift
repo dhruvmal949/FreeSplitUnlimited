@@ -21,13 +21,15 @@ struct GroupSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Group") {
+                Section(occasion.isOneToOne ? "Split" : "Group") {
                     TextField("Name", text: $name)
                         .textInputAutocapitalization(.words)
                     TextField("Note", text: $note)
-                    Picker("Kind", selection: $kind) {
-                        ForEach(GroupKind.allCases) { option in
-                            Label(option.title, systemImage: option.symbol).tag(option)
+                    if !occasion.isOneToOne {
+                        Picker("Kind", selection: $kind) {
+                            ForEach(GroupKind.allCases) { option in
+                                Label(option.title, systemImage: option.symbol).tag(option)
+                            }
                         }
                     }
                 }
@@ -36,7 +38,7 @@ struct GroupSettingsView: View {
                     ForEach(occasion.sortedMembers(), id: \.id) { person in
                         Text(person.name)
                     }
-                    Text("Use Add members on the group page to invite someone.")
+                    Text("Use Add people on the group page to invite someone.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -84,7 +86,9 @@ struct GroupSettingsView: View {
     private func save() {
         occasion.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         occasion.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        occasion.groupType = kind.rawValue
+        if !occasion.isOneToOne {
+            occasion.groupType = kind.rawValue
+        }
         occasion.touch()
         modelContext.persist()
         dismiss()

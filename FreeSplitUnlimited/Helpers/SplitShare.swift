@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftData
+import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
 
@@ -20,13 +21,19 @@ extension UTType {
     }
 }
 
-/// Thread-safe capture of incoming file URLs. Copy happens immediately because
-/// security-scoped grants expire if you hop to a later Task first.
+/// Thread-safe capture of incoming file URLs and `freesplit://` invite links.
+/// File copy happens immediately because security-scoped grants expire if you hop later.
 enum IncomingURLCapture {
     private static let lock = NSLock()
     private static var urls: [URL] = []
 
     static func capture(_ url: URL) {
+        if SplitShare.isShareLink(url) {
+            lock.lock()
+            urls.append(url)
+            lock.unlock()
+            return
+        }
         guard SplitShare.isSplitFile(url) else { return }
         let local = SplitShare.copyIntoSandbox(url) ?? url
         lock.lock()
@@ -45,6 +52,7 @@ enum IncomingURLCapture {
 
 enum SplitShare {
     static let fileExtension = "freesplit"
+    static let urlScheme = "freesplit"
 
     /// Package one split for sharing with another device.
     struct Package: Codable {
@@ -58,11 +66,97 @@ enum SplitShare {
         Package(exportedAt: .now, occasion: SplitBackup.exportOccasion(occasion))
     }
 
-    static func encode(_ package: Package) throws -> Data {
+    static func encode(_ package: Package, prettyPrinted: Bool = true) throws -> Data {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if prettyPrinted {
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        } else {
+            encoder.outputFormatting = [.sortedKeys]
+        }
         encoder.dateEncodingStrategy = .iso8601
         return try encoder.encode(package)
+    }
+
+    /// Invite URL another phone can tap to add this group. No internet required.
+    static func shareLink(for occasion: Occasion) throws -> URL {
+        let package = try makePackage(from: occasion)
+        return try shareURL(fromJSON: try encode(package, prettyPrinted: false))
+    }
+
+    static func activityPayload(for occasion: Occasion) async -> ActivitySharePayload {
+        let file = try? temporaryFileURL(for: occasion)
+        let store = ShareLink.appStoreURL
+        return ActivitySharePayload(
+            message: SplitShareText.inviteMessage(groupName: occasion.name, link: store),
+            link: store,
+            fileURL: file,
+            fileTitle: occasion.name.isEmpty ? "Split" : occasion.name
+        )
+    }
+
+    static func shareURL(fromJSON data: Data) throws -> URL {
+        let compressed = try (data as NSData).compressed(using: .zlib) as Data
+        let token = base64URLEncoded(compressed)
+        let string = "\(urlScheme)://i/\(token)"
+        guard string.count < 12_000, let url = URL(string: string) else {
+            throw ShareError.linkTooLong
+        }
+        return url
+    }
+
+    static func isShareLink(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == urlScheme
+    }
+
+    static func json(fromShareURL url: URL) throws -> Data {
+        guard let token = shareToken(from: url),
+              let payload = base64URLDecoded(token) else {
+            throw ShareError.invalidFile
+        }
+        if let json = try? (payload as NSData).decompressed(using: .zlib) {
+            return json as Data
+        }
+        if payload.first == UInt8(ascii: "{") {
+            return payload
+        }
+        throw ShareError.invalidFile
+    }
+
+    private static func shareToken(from url: URL) -> String? {
+        guard isShareLink(url) else { return nil }
+        if let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
+            if let value = items.first(where: { $0.name == "d" || $0.name == "payload" })?.value,
+               !value.isEmpty {
+                return value.removingPercentEncoding ?? value
+            }
+        }
+        let host = url.host?.lowercased()
+        if host == "i" || host == "import" {
+            let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if !path.isEmpty {
+                return path.removingPercentEncoding ?? path
+            }
+        }
+        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return path.isEmpty ? nil : (path.removingPercentEncoding ?? path)
+    }
+
+    private static func base64URLEncoded(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func base64URLDecoded(_ string: String) -> Data? {
+        var value = string
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let remainder = value.count % 4
+        if remainder > 0 {
+            value.append(String(repeating: "=", count: 4 - remainder))
+        }
+        return Data(base64Encoded: value)
     }
 
     static func decode(from data: Data) throws -> Package {
@@ -149,6 +243,12 @@ enum SplitShare {
     /// Imports a shared split. Always applies the file so opening it actually shows the split.
     @discardableResult
     static func importFile(at url: URL, into context: ModelContext) throws -> Occasion {
+        if ShareLink.isPayloadLink(url) {
+            throw ShareError.unreadableFile
+        }
+        if isShareLink(url) {
+            return try importData(try json(fromShareURL: url), into: context)
+        }
         let local = copyIntoSandbox(url) ?? url
         defer {
             if local.path.contains("/Incoming/") {
@@ -168,6 +268,9 @@ enum SplitShare {
     @discardableResult
     static func importData(_ data: Data, into context: ModelContext) throws -> Occasion {
         if let package = try? decode(from: data) {
+            return try applyOpenedShare(package.occasion, into: context)
+        }
+        if let package = try? ShareLink.package(fromPayload: data) {
             return try applyOpenedShare(package.occasion, into: context)
         }
 
@@ -217,14 +320,17 @@ enum SplitShare {
     }
 
     static func isSplitFile(_ url: URL) -> Bool {
+        if isShareLink(url) { return false }
         let ext = url.pathExtension.lowercased()
-        return ext == fileExtension || ext == "json" || ext.isEmpty
-            || url.absoluteString.lowercased().contains("freesplit")
+        return ext == fileExtension || ext == "json"
+            || url.lastPathComponent.lowercased().contains("freesplit")
     }
 
     enum ShareError: LocalizedError {
         case invalidFile
         case unreadableFile
+        case linkTooLong
+        case linkUnavailable
 
         var errorDescription: String? {
             switch self {
@@ -232,6 +338,10 @@ enum SplitShare {
                 return "This file isn't a valid Free Split share."
             case .unreadableFile:
                 return "Couldn't read this split file. Try Import Split from the Free Split home screen."
+            case .linkTooLong:
+                return "This group is too large to copy as a link. AirDrop or Messages the .freesplit file instead."
+            case .linkUnavailable:
+                return "Couldn't make a tap-to-open link. Check your internet, or AirDrop the .freesplit file."
             }
         }
     }
@@ -284,6 +394,10 @@ final class IncomingSplitOpener {
         defer { isFlushing = false }
 
         for url in urls {
+            if ShareLink.isPayloadLink(url) {
+                Task { await self.importRemote(url) }
+                continue
+            }
             do {
                 let occasion = try SplitShare.importFile(at: url, into: context)
                 NotificationCenter.default.post(name: .freeSplitDidImport, object: occasion.id)
@@ -297,9 +411,25 @@ final class IncomingSplitOpener {
             }
         }
     }
+
+    private func importRemote(_ url: URL) async {
+        guard let context, let id = ShareLink.payloadID(from: url) else { return }
+        do {
+            let data = try await ShareLink.downloadPayload(id: id)
+            let occasion = try SplitShare.importData(data, into: context)
+            NotificationCenter.default.post(name: .freeSplitDidImport, object: occasion.id)
+        } catch {
+            NotificationCenter.default.post(
+                name: .freeSplitImportFailed,
+                object: nil,
+                userInfo: ["message": error.localizedDescription]
+            )
+            print("Remote split import failed: \(error)")
+        }
+    }
 }
 
-/// Supplies the .freesplit UTI so AirDrop / Files treat the share as a Free Split file.
+/// .freesplit file for AirDrop / Messages / Files. Omitted from Copy so JSON is not pasted.
 final class SplitFileActivityItem: NSObject, UIActivityItemSource {
     let url: URL
     let title: String
@@ -314,14 +444,47 @@ final class SplitFileActivityItem: NSObject, UIActivityItemSource {
     }
 
     func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? {
-        url
-    }
-
-    func activityViewController(_ activityViewController: UIActivityViewController, dataTypeIdentifierForActivityType activityType: UIActivity.ActivityType?) -> String {
-        UTType.freeSplitIdentifier
+        if activityType == .copyToPasteboard {
+            return nil
+        }
+        return url
     }
 
     func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String {
         title
+    }
+}
+
+struct ActivitySharePayload: Identifiable {
+    let id = UUID()
+    let message: String
+    let link: URL?
+    let fileURL: URL?
+    let fileTitle: String
+}
+
+struct ActivityShareSheet: UIViewControllerRepresentable {
+    let payload: ActivitySharePayload
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        var items: [Any] = [payload.message]
+        if let url = payload.fileURL {
+            items.append(SplitFileActivityItem(url: url, title: payload.fileTitle))
+        }
+        return UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+enum SplitShareText {
+    static func inviteMessage(groupName: String, link: URL? = nil) -> String {
+        let name = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let group = name.isEmpty ? "my group" : "my group '\(name)'"
+        var lines = ["Hey friends! Join \(group) on Free Split."]
+        if let link {
+            lines.append("Don't have Free Split? Get it on the App Store: \(link.absoluteString)")
+        }
+        return lines.joined(separator: "\n")
     }
 }

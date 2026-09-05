@@ -19,7 +19,6 @@ final class Occasion {
     var isDeleted: Bool = false
     /// Stored as a string so older SwiftData stores can load without trapping.
     var groupType: String = GroupKind.other.rawValue
-    var coverImageData: Data? = nil
     @Relationship(deleteRule: .cascade, inverse: \Person.occasion)
     var members: [Person] = []
     @Relationship(deleteRule: .cascade, inverse: \Expense.occasion)
@@ -31,8 +30,7 @@ final class Occasion {
         createdAt: Date = .now,
         updatedAt: Date? = nil,
         id: UUID = UUID(),
-        groupType: String = GroupKind.other.rawValue,
-        coverImageData: Data? = nil
+        groupType: String = GroupKind.other.rawValue
     ) {
         self.id = id
         self.name = name
@@ -41,7 +39,6 @@ final class Occasion {
         self.updatedAt = updatedAt ?? createdAt
         self.isDeleted = false
         self.groupType = groupType
-        self.coverImageData = coverImageData
         self.members = []
         self.expenses = []
     }
@@ -50,9 +47,26 @@ final class Occasion {
         GroupKind.resolve(groupType)
     }
 
+    /// Friends-tab splits start as one-to-one until a third person is added.
+    var isOneToOne: Bool {
+        groupType == SplitKind.oneToOne
+    }
+
+    /// Home lists named groups. A Friends split becomes a group at 3+ people.
+    var appearsInGroups: Bool {
+        !isOneToOne || uniqueMembers.count > 2
+    }
+
     /// Marks this split as changed so sync (mesh + cloud) knows to propagate it.
     func touch() {
         updatedAt = .now
+    }
+
+    /// When a one-to-one split grows past two people, save it as a group.
+    func promoteToGroupIfNeeded() {
+        guard isOneToOne, uniqueMembers.count > 2 else { return }
+        groupType = GroupKind.other.rawValue
+        touch()
     }
 
     var totalSpent: Decimal {
@@ -87,6 +101,12 @@ final class Occasion {
         }
         expenses = uniqueExpenses
     }
+}
+
+enum SplitKind {
+    /// Stored `groupType` for a Friends-created 1:1 split. Not a `GroupKind` case
+    /// so it does not show in the Create Group kind picker.
+    static let oneToOne = "oneToOne"
 }
 
 enum GroupKind: String, CaseIterable, Identifiable {

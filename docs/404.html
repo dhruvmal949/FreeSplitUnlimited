@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Join on Free Split</title>
+  <meta property="og:title" content="Join on Free Split">
+  <meta property="og:description" content="Hey friends! Open this group in Free Split.">
+  <meta name="apple-itunes-app" content="app-argument=freesplit://">
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(160deg, #115e59, #0d9488, #14b8a6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #fff;
+      color: #134e4a;
+      border-radius: 24px;
+      padding: 32px 24px;
+      max-width: 380px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+    }
+    h1 { font-size: 1.4rem; margin: 0 0 10px; }
+    p { margin: 0 0 16px; color: #5b716c; line-height: 1.45; }
+    a.btn {
+      display: block;
+      background: #0f766e;
+      color: #fff;
+      text-decoration: none;
+      font-weight: 700;
+      padding: 14px 16px;
+      border-radius: 14px;
+      margin-bottom: 12px;
+    }
+    a.store {
+      display: block;
+      color: #0f766e;
+      font-weight: 600;
+      text-decoration: none;
+      padding: 10px;
+    }
+    #missing { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 id="title">Hey friends!</h1>
+    <p id="subtitle">Join this group on Free Split.</p>
+    <a class="btn" id="open" href="#">Open in Free Split</a>
+    <div id="missing">
+      <p>Don't have Free Split yet? Download it, then tap the link again.</p>
+      <a class="store" id="store" href="https://apps.apple.com/search?term=Free%20Split%20Unlimited">Get Free Split on the App Store</a>
+    </div>
+  </div>
+  <script>
+    // If Free Split is installed, `freesplit://` opens it.
+    // If it is not, Safari stays here and we send the user to the App Store.
+    (function () {
+      var APP_STORE = "https://apps.apple.com/search?term=Free%20Split%20Unlimited";
+      var params = new URLSearchParams(location.search);
+      var parts = location.pathname.split("/").filter(Boolean);
+      var joinAt = parts.lastIndexOf("join");
+      var id = params.get("p") || (joinAt >= 0 ? parts[joinAt + 1] : "") || "";
+      var name = params.get("n") || "";
+      if (name) {
+        document.getElementById("subtitle").textContent =
+          "Join my group '" + name + "' on Free Split.";
+        document.title = "Join " + name + " on Free Split";
+      }
+      var deep = "freesplit://p/" + encodeURIComponent(id);
+      var open = document.getElementById("open");
+      var store = document.getElementById("store");
+      var missing = document.getElementById("missing");
+      open.href = deep;
+      store.href = APP_STORE;
+
+      var leftPage = false;
+      document.addEventListener("visibilitychange", function () {
+        if (document.hidden) leftPage = true;
+      });
+
+      function tryOpenApp() {
+        if (!id) {
+          missing.style.display = "block";
+          return;
+        }
+        location.href = deep;
+        setTimeout(function () {
+          if (!leftPage && !document.hidden) {
+            missing.style.display = "block";
+            location.href = APP_STORE;
+          }
+        }, 1800);
+      }
+
+      open.addEventListener("click", function (event) {
+        event.preventDefault();
+        tryOpenApp();
+      });
+      tryOpenApp();
+    })();
+  </script>
+</body>
+</html>

@@ -5,16 +5,16 @@
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>freesplit</string>
+			</array>
 			<key>CFBundleTypeName</key>
 			<string>Free Split Share</string>
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>LSHandlerRank</key>
 			<string>Owner</string>
-			<key>CFBundleTypeExtensions</key>
-			<array>
-				<string>freesplit</string>
-			</array>
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>pramela.freesplitunlimited.split</string>
@@ -33,13 +33,33 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>pramela.freesplitunlimited.share</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>freesplit</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_freesplit-mesh._tcp</string>
+		<string>_freesplit-mesh._udp</string>
+	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
 			<key>UTTypeConformsTo</key>
 			<array>
-				<string>public.json</string>
 				<string>public.data</string>
+				<string>public.content</string>
 			</array>
 			<key>UTTypeDescription</key>
 			<string>Free Split Share</string>
@@ -53,31 +73,10 @@
 				</array>
 				<key>public.mime-type</key>
 				<array>
-					<string>application/json</string>
+					<string>application/octet-stream</string>
 				</array>
 			</dict>
 		</dict>
 	</array>
-	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<false/>
-	<key>UISupportsDocumentBrowser</key>
-	<false/>
-	<key>UIFileSharingEnabled</key>
-	<true/>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_freesplit-mesh._tcp</string>
-		<string>_freesplit-mesh._udp</string>
-	</array>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Free Split uses your local network to sync splits directly with nearby friends' phones — no internet or AirDrop needed.</string>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.</string>
-	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.</string>
-	<key>NSContactsUsageDescription</key>
-	<string>Free Split uses your contacts so you can add friends to a split. You can allow all contacts or only the ones you choose.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Free Split uses your photos so you can add a picture to a group.</string>
 </dict>
 </plist>
