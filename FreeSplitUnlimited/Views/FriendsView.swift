@@ -11,6 +11,13 @@ struct FriendsView: View {
     private var allOccasions: [Occasion]
     @State private var showingFilter = false
     @State private var filter: FriendBalanceFilter = .none
+    @State private var showingAddOccasion = false
+    @State private var pendingOpenGroupID: UUID?
+    @State private var openedGroupID: OpenedGroup?
+
+    private struct OpenedGroup: Identifiable, Hashable {
+        let id: UUID
+    }
 
     private var occasions: [Occasion] {
         var seen = Set<UUID>()
@@ -34,7 +41,7 @@ struct FriendsView: View {
             if friends.isEmpty {
                 NoneState(
                     image: "person",
-                    message: "No one-to-one friends yet. Add people to a split to see them here."
+                    message: "No one-to-one friends yet. Tap + to start a split with one person."
                 )
             } else {
                 List {
@@ -74,10 +81,12 @@ struct FriendsView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    showingFilter = true
+                    guard !showingAddOccasion else { return }
+                    showingAddOccasion = true
                 } label: {
-                    Label("Set filter", systemImage: "plus")
+                    Label("New Split", systemImage: "plus")
                 }
+                .disabled(showingAddOccasion)
             }
         }
         .confirmationDialog("Set filter", isPresented: $showingFilter, titleVisibility: .visible) {
@@ -87,6 +96,24 @@ struct FriendsView: View {
                 }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showingAddOccasion, onDismiss: {
+            if let id = pendingOpenGroupID {
+                pendingOpenGroupID = nil
+                openedGroupID = OpenedGroup(id: id)
+            }
+        }) {
+            CreateFriendSplitView { id in
+                pendingOpenGroupID = id
+            }
+        }
+        .navigationDestination(item: $openedGroupID) { token in
+            if let occasion = occasions.first(where: { $0.id == token.id }) {
+                OccasionDetailView(occasion: occasion)
+            } else {
+                NoneState(image: "person.3", message: "This group isn’t available.")
+                    .homeBackButton()
+            }
         }
         .freeSplitBackground()
         .avoidsMainTabBar()
@@ -123,9 +150,7 @@ struct FriendsView: View {
     }
 
     private func balanceColor(for net: Decimal) -> Color {
-        if net > 0 { return .green }
-        if net < 0 { return .orange }
-        return .secondary
+        AppTheme.balanceColor(for: net)
     }
 }
 

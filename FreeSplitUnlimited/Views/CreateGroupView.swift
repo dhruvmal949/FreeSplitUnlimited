@@ -16,7 +16,7 @@ struct CreateGroupView: View {
 
     @State private var name = ""
     @State private var note = ""
-    @State private var kind: GroupKind = .trip
+    @State private var kind: GroupKind?
     @State private var friends: [FriendDraft]
     @State private var photoItem: PhotosPickerItem?
     @State private var coverImage: UIImage?
@@ -56,6 +56,7 @@ struct CreateGroupView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(AppTheme.teal)
                     .disabled(!canCreate)
+                    .accessibilityIdentifier("createGroupSubmit")
                     .padding(.top, 4)
                     .padding(.bottom, 12)
                 }
@@ -127,6 +128,7 @@ struct CreateGroupView: View {
                 TextField("Name this group", text: $name)
                     .textInputAutocapitalization(.words)
                     .font(.headline)
+                    .accessibilityIdentifier("groupNameField")
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(Color.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -268,8 +270,7 @@ struct CreateGroupView: View {
         let occasion = Occasion(
             name: trimmedName,
             note: note.trimmingCharacters(in: .whitespacesAndNewlines),
-            groupType: kind.rawValue,
-            coverImageData: coverImageData
+            groupType: (kind ?? .other).rawValue
         )
 
         var people = friends.filter(\.isComplete).map {
@@ -285,6 +286,7 @@ struct CreateGroupView: View {
 
         occasion.members = people
         modelContext.insert(occasion)
+        GroupCoverStore.save(coverImageData, for: occasion.id)
         modelContext.persist()
         let id = occasion.id
         dismiss()

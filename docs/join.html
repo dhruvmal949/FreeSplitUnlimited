@@ -61,6 +61,8 @@
     </div>
   </div>
   <script>
+    // If Free Split is installed, `freesplit://` opens it.
+    // If it is not, Safari stays here and we send the user to the App Store.
     (function () {
       var APP_STORE = "https://apps.apple.com/search?term=Free%20Split%20Unlimited";
       var params = new URLSearchParams(location.search);

@@ -64,16 +64,23 @@ struct FreeSplitUnlimitedApp: App {
             ExpenseShare.self,
         ])
 
+        if AppLaunchFlags.isUITesting {
+            let memory = ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: true,
+                cloudKitDatabase: .none
+            )
+            return try? ModelContainer(for: schema, configurations: [memory])
+        }
+
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        let storeURL = support
-            .appendingPathComponent("FreeSplitUnlimited", isDirectory: true)
-            .appendingPathComponent("FreeSplit.v2.store")
+        let folder = support.appendingPathComponent("FreeSplitUnlimited", isDirectory: true)
+        let storeURL = folder.appendingPathComponent("FreeSplit.v3.store")
+        let v2URL = folder.appendingPathComponent("FreeSplit.v2.store")
 
-        try? FileManager.default.createDirectory(
-            at: storeURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        copyStore(from: v2URL, to: storeURL, overwrite: false)
 
         let disk = ModelConfiguration(
             "FreeSplitUnlimited",
@@ -86,7 +93,15 @@ struct FreeSplitUnlimitedApp: App {
             return container
         }
 
-        print("SwiftData store failed. Resetting store once.")
+        print("SwiftData store failed. Resetting store once and copying the previous store.")
+        deleteStore(at: storeURL)
+        copyStore(from: v2URL, to: storeURL, overwrite: true)
+
+        if let container = try? ModelContainer(for: schema, configurations: [disk]) {
+            return container
+        }
+
+        print("SwiftData store copy failed. Starting a new empty store.")
         deleteStore(at: storeURL)
 
         if let container = try? ModelContainer(for: schema, configurations: [disk]) {
@@ -108,6 +123,22 @@ struct FreeSplitUnlimitedApp: App {
             try? fm.removeItem(at: URL(fileURLWithPath: url.path + suffix))
         }
     }
+
+    /// Copies an older on-disk store so a schema bump does not look like an empty app.
+    private static func copyStore(from source: URL, to dest: URL, overwrite: Bool) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: source.path) else { return }
+        if !overwrite, fm.fileExists(atPath: dest.path) { return }
+        if overwrite {
+            deleteStore(at: dest)
+        }
+        for suffix in ["", "-shm", "-wal"] {
+            let src = URL(fileURLWithPath: source.path + suffix)
+            let dst = URL(fileURLWithPath: dest.path + suffix)
+            guard fm.fileExists(atPath: src.path) else { continue }
+            try? fm.copyItem(at: src, to: dst)
+        }
+    }
 }
 
 private struct RootView: View {
@@ -127,7 +158,9 @@ private struct RootView: View {
         .freeSplitBackground()
         .modelContainer(container)
         .onAppear {
-            SplitBackup.restoreIfNeeded(into: container.mainContext)
+            if !AppLaunchFlags.isUITesting {
+                SplitBackup.restoreIfNeeded(into: container.mainContext)
+            }
             IncomingSplitOpener.shared.attach(context: container.mainContext)
             SyncCoordinator.shared.attach(context: container.mainContext)
             DispatchQueue.main.async {
@@ -146,11 +179,11 @@ private struct RootView: View {
             }
         }
         .onChange(of: session.isAuthenticated) { _, isAuthenticated in
-            if isAuthenticated {
+            if isAuthenticated, !AppLaunchFlags.isUITesting {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     SyncCoordinator.shared.startNearby()
                 }
-            } else {
+            } else if !isAuthenticated {
                 SyncCoordinator.shared.stopNearby()
             }
         }

@@ -18,15 +18,9 @@ struct OccasionDetailView: View {
     @State private var editingFriendID: UUID?
     @State private var editingExpenseID: UUID?
     @State private var selectedTab = 0
-    @State private var sharePayload: SharePayload?
+    @State private var sharePayload: ActivitySharePayload?
     @State private var shareAlert: String?
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
-
-    private struct SharePayload: Identifiable {
-        let id = UUID()
-        let url: URL
-        let message: String
-    }
 
     private var sortedExpenses: [Expense] {
         var seen = Set<UUID>()
@@ -75,7 +69,7 @@ struct OccasionDetailView: View {
         .navigationBarBackButtonHidden(true)
         .toolbarBackground(.hidden, for: .navigationBar)
         .sheet(item: $sharePayload) { payload in
-            ShareSheet(url: payload.url, title: occasion.name, message: payload.message)
+            ActivityShareSheet(payload: payload)
         }
         .alert("Couldn't Share", isPresented: Binding(
             get: { shareAlert != nil },
@@ -146,11 +140,17 @@ struct OccasionDetailView: View {
 
     private var heroHeader: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
+            HStack(spacing: 10) {
                 headerCircleButton(systemImage: "chevron.left", label: "Back to groups") {
                     dismiss()
                 }
                 Spacer()
+                headerCircleButton(systemImage: "person.badge.plus", label: "Add people") {
+                    Task { await presentMemberPicker() }
+                }
+                headerCircleButton(systemImage: "square.and.arrow.up", label: "Share group") {
+                    shareSplit()
+                }
                 headerCircleButton(systemImage: "gearshape.fill", label: "Group settings") {
                     showingSettings = true
                 }
@@ -191,6 +191,7 @@ struct OccasionDetailView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
+        .accessibilityIdentifier(label)
     }
 
     private var pillBar: some View {
@@ -238,7 +239,7 @@ struct OccasionDetailView: View {
                 Button {
                     Task { await presentMemberPicker() }
                 } label: {
-                    Label("Add members", systemImage: "person.badge.plus")
+                    Label("Add people", systemImage: "person.badge.plus")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -269,7 +270,7 @@ struct OccasionDetailView: View {
 
     private var expensesTab: some View {
         Group {
-            if sortedExpenses.isEmpty {
+            if sortedExpenses.isEmpty, !occasion.isOneToOne {
                 ContentUnavailableView(
                     "No Expenses",
                     systemImage: "cart",
@@ -277,16 +278,39 @@ struct OccasionDetailView: View {
                 )
             } else {
                 List {
-                    ForEach(sortedExpenses, id: \.id) { expense in
-                        Button {
-                            editingExpenseID = expense.id
-                        } label: {
-                            ExpenseRowView(expense: expense)
+                    if occasion.isOneToOne {
+                        Section {
+                            Button {
+                                Task { await presentMemberPicker() }
+                            } label: {
+                                Label("Add people", systemImage: "person.badge.plus")
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                            }
+                            .listRowBackground(AppTheme.teal)
+                            .foregroundStyle(.white)
+                        } footer: {
+                            Text("This split is just the two of you. Adding more people saves it as a group.")
                         }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Color.white.opacity(0.78))
                     }
-                    .onDelete(perform: deleteExpenses)
+
+                    if sortedExpenses.isEmpty {
+                        Text("Tap Add expense to log something someone paid for.")
+                            .foregroundStyle(.secondary)
+                            .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(sortedExpenses, id: \.id) { expense in
+                            Button {
+                                editingExpenseID = expense.id
+                            } label: {
+                                ExpenseRowView(expense: expense)
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(Color.white.opacity(0.78))
+                        }
+                        .onDelete(perform: deleteExpenses)
+                    }
                 }
                 .freeSplitListStyle()
             }
@@ -385,10 +409,14 @@ struct OccasionDetailView: View {
             let person = Person(name: name, email: contact.email, phone: contact.phone)
             person.occasion = occasion
             modelContext.insert(person)
+            if !occasion.members.contains(where: { $0.id == person.id }) {
+                occasion.members.append(person)
+            }
             added = true
         }
         guard added else { return }
         occasion.touch()
+        occasion.promoteToGroupIfNeeded()
         modelContext.persist()
     }
 
@@ -403,9 +431,7 @@ struct OccasionDetailView: View {
     }
 
     private func balanceColor(for net: Decimal) -> Color {
-        if net > 0 { return .green }
-        if net < 0 { return .orange }
-        return .secondary
+        AppTheme.balanceColor(for: net)
     }
 
     private func deleteExpenses(at offsets: IndexSet) {
@@ -426,14 +452,13 @@ struct OccasionDetailView: View {
     }
 
     private func shareSplit() {
-        do {
-            let url = try SplitShare.temporaryFileURL(for: occasion)
-            sharePayload = SharePayload(
-                url: url,
-                message: "Join my Free Split group “\(occasion.name)”. Open this file in Free Split."
-            )
-        } catch {
-            shareAlert = error.localizedDescription
+        Task {
+            let payload = await SplitShare.activityPayload(for: occasion)
+            if payload.link == nil, payload.fileURL == nil {
+                shareAlert = "Couldn't create a share link for this group."
+                return
+            }
+            sharePayload = payload
         }
     }
 }
@@ -453,23 +478,6 @@ private struct WaveShape: Shape {
         path.closeSubpath()
         return path
     }
-}
-
-private struct ShareSheet: UIViewControllerRepresentable {
-    let url: URL
-    let title: String
-    var message: String = ""
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let item = SplitFileActivityItem(url: url, title: title)
-        var items: [Any] = [item]
-        if !message.isEmpty {
-            items.insert(message, at: 0)
-        }
-        return UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 private struct ExpenseRowView: View {

@@ -86,16 +86,12 @@ struct OverallBalanceBanner: View {
                 .foregroundColor(.secondary)
         }
         if net > 0 {
-            return Text("Overall, you are owed ")
-                .foregroundColor(.secondary)
-            + Text(CurrencyFormat.string(from: net))
-                .foregroundColor(.green)
+            return Text("Overall, you are owed \(CurrencyFormat.string(from: net))")
+                .foregroundColor(AppTheme.youAreOwed)
                 .fontWeight(.semibold)
         }
-        return Text("Overall, you owe ")
-            .foregroundColor(.secondary)
-        + Text(CurrencyFormat.string(from: -net))
-            .foregroundColor(.orange)
+        return Text("Overall, you owe \(CurrencyFormat.string(from: -net))")
+            .foregroundColor(AppTheme.youOwe)
             .fontWeight(.semibold)
     }
 }

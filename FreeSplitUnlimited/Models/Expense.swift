@@ -55,46 +55,27 @@ final class Expense {
         self.shares = shares
     }
 
-    /// How much each participant owes for this expense.
+    /// How much each participant owes for this expense. Shares always add up to `amount`.
     func owedAmounts() -> [UUID: Decimal] {
-        let people = uniqueParticipants
+        let people = uniqueParticipants.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
         guard !people.isEmpty else { return [:] }
 
+        var weights: [(id: UUID, weight: Decimal)]
         switch splitMethod {
         case .equal:
-            let share = amount / Decimal(people.count)
-            var result: [UUID: Decimal] = [:]
-            for person in people {
-                result[person.id] = share
+            weights = people.map { ($0.id, 1) }
+        case .percentage, .parts:
+            weights = people.map { person in
+                let value = shares.first(where: { $0.person?.id == person.id })?.value ?? 0
+                return (person.id, value)
             }
-            return result
-
-        case .percentage:
-            var result: [UUID: Decimal] = [:]
-            for person in people {
-                let percent = shares.first(where: { $0.person?.id == person.id })?.value ?? 0
-                result[person.id] = amount * percent / 100
+            if weights.allSatisfy({ $0.weight == 0 }) {
+                weights = people.map { ($0.id, 1) }
             }
-            return result
-
-        case .parts:
-            let totalParts = shares
-                .filter { share in people.contains(where: { $0.id == share.person?.id }) }
-                .reduce(into: [UUID: Decimal]()) { partial, share in
-                    guard let id = share.person?.id else { return }
-                    partial[id] = share.value
-                }
-                .values
-                .reduce(Decimal(0), +)
-            guard totalParts > 0 else { return [:] }
-
-            var result: [UUID: Decimal] = [:]
-            for person in people {
-                let parts = shares.first(where: { $0.person?.id == person.id })?.value ?? 0
-                result[person.id] = amount * parts / totalParts
-            }
-            return result
         }
+        return MoneySplit.distribute(total: amount, weights: weights)
     }
 
     var splitSummary: String {

@@ -82,23 +82,106 @@ enum SplitBackup {
             let existing = try context.fetch(FetchDescriptor<Occasion>())
             guard existing.isEmpty else { return false }
 
-            guard let data = loadFromKeychain(),
-                  let snapshot = try? JSONDecoder().decode(SplitsBackupSnapshot.self, from: data),
-                  !snapshot.occasions.isEmpty else {
-                return false
-            }
+            if restoreFromKeychain(into: context) { return true }
+            if restoreFromLegacyStores(into: context) { return true }
+            return false
+        } catch {
+            print("Split restore failed: \(error)")
+            return false
+        }
+    }
 
-            var seenIDs = Set<UUID>()
-            for backup in snapshot.occasions {
-                guard seenIDs.insert(backup.id).inserted else { continue }
-                importOccasion(backup, into: context)
-            }
+    private static func restoreFromKeychain(into context: ModelContext) -> Bool {
+        guard let data = loadFromKeychain(),
+              let snapshot = try? JSONDecoder().decode(SplitsBackupSnapshot.self, from: data),
+              !snapshot.occasions.isEmpty else {
+            return false
+        }
+
+        var seenIDs = Set<UUID>()
+        for backup in snapshot.occasions {
+            guard seenIDs.insert(backup.id).inserted else { continue }
+            importOccasion(backup, into: context)
+        }
+        do {
             try context.save()
             KnownFriendsStore.remember(from: context)
             return true
         } catch {
-            print("Split restore failed: \(error)")
+            print("Split keychain restore failed: \(error)")
             return false
+        }
+    }
+
+    /// Pulls groups out of FreeSplit.v2 (and earlier) when the current store is empty.
+    private static func restoreFromLegacyStores(into context: ModelContext) -> Bool {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        let folder = support.appendingPathComponent("FreeSplitUnlimited", isDirectory: true)
+        let schema = Schema([Occasion.self, Person.self, Expense.self, ExpenseShare.self])
+
+        for name in ["FreeSplit.v2.store", "FreeSplit.v1.store"] {
+            let url = folder.appendingPathComponent(name)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            if importOccasions(fromStore: url, schema: schema, into: context) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func importOccasions(fromStore url: URL, schema: Schema, into context: ModelContext) -> Bool {
+        let temp = url.deletingLastPathComponent()
+            .appendingPathComponent("LegacyImport-\(UUID().uuidString).store")
+        copyStore(from: url, to: temp)
+        defer { deleteStore(at: temp) }
+
+        let config = ModelConfiguration(
+            "FreeSplitLegacyImport-\(temp.lastPathComponent)",
+            schema: schema,
+            url: temp,
+            cloudKitDatabase: .none
+        )
+        guard let container = try? ModelContainer(for: schema, configurations: [config]) else {
+            return false
+        }
+
+        let legacy = ModelContext(container)
+        guard let occasions = try? legacy.fetch(FetchDescriptor<Occasion>()),
+              !occasions.isEmpty else {
+            return false
+        }
+
+        var seenIDs = Set<UUID>()
+        for occasion in occasions {
+            guard seenIDs.insert(occasion.id).inserted else { continue }
+            importOccasion(exportOccasion(occasion), into: context)
+        }
+        do {
+            try context.save()
+            KnownFriendsStore.remember(from: context)
+            save(from: context)
+            return true
+        } catch {
+            print("Legacy store import failed: \(error)")
+            return false
+        }
+    }
+
+    private static func copyStore(from source: URL, to dest: URL) {
+        let fm = FileManager.default
+        for suffix in ["", "-shm", "-wal"] {
+            let src = URL(fileURLWithPath: source.path + suffix)
+            let dst = URL(fileURLWithPath: dest.path + suffix)
+            guard fm.fileExists(atPath: src.path) else { continue }
+            try? fm.copyItem(at: src, to: dst)
+        }
+    }
+
+    private static func deleteStore(at url: URL) {
+        let fm = FileManager.default
+        for suffix in ["", "-shm", "-wal"] {
+            try? fm.removeItem(at: URL(fileURLWithPath: url.path + suffix))
         }
     }
 

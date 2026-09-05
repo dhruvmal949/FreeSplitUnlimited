@@ -22,6 +22,7 @@ struct ContentView: View {
             MainTabBar(selectedTab: selectedTab, onSelect: selectTab)
         }
         .onAppear {
+            guard !AppLaunchFlags.isUITesting else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 SyncCoordinator.shared.startNearby()
             }
@@ -86,6 +87,7 @@ private struct MainTabBar: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
+        .accessibilityIdentifier("tab-\(title)")
     }
 }
 
@@ -117,17 +119,22 @@ private struct GroupsView: View {
         return allOccasions.filter { !$0.isDeleted && seen.insert($0.id).inserted }
     }
 
+    /// One-to-one Friends splits stay off Home until a third person is added.
+    private var groupOccasions: [Occasion] {
+        occasions.filter(\.appearsInGroups)
+    }
+
     private var visibleOccasions: [Occasion] {
-        occasions.filter { groupFilter.matches(myNet: BalanceCalculator.myNet(in: $0)) }
+        groupOccasions.filter { groupFilter.matches(myNet: BalanceCalculator.myNet(in: $0)) }
     }
 
     private var overallNet: Decimal {
-        occasions.reduce(0) { $0 + BalanceCalculator.myNet(in: $1) }
+        groupOccasions.reduce(0) { $0 + BalanceCalculator.myNet(in: $1) }
     }
 
     var body: some View {
         Group {
-            if occasions.isEmpty {
+            if groupOccasions.isEmpty {
                 emptyState
             } else {
                 List {
@@ -180,10 +187,11 @@ private struct GroupsView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    showingFilter = true
+                    openNewSplit()
                 } label: {
-                    Label("Set filter", systemImage: "plus")
+                    Label("Create Group", systemImage: "plus")
                 }
+                .disabled(showingAddOccasion)
             }
         }
         .confirmationDialog("Set filter", isPresented: $showingFilter, titleVisibility: .visible) {
@@ -307,7 +315,7 @@ private struct GroupsView: View {
             .tint(AppTheme.teal)
             .disabled(showingAddOccasion)
 
-            if occasions.isEmpty {
+            if groupOccasions.isEmpty {
                 Button {
                     showingImporter = true
                 } label: {
@@ -358,6 +366,15 @@ struct OccasionRowView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
+                let net = BalanceCalculator.myNet(in: occasion)
+                if net != 0 {
+                    Text(net > 0
+                         ? "You are owed \(CurrencyFormat.string(from: net))"
+                         : "You owe \(CurrencyFormat.string(from: -net))")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.balanceColor(for: net))
+                }
+
                 if !occasion.note.isEmpty {
                     Text(occasion.note)
                         .font(.caption)
@@ -372,7 +389,7 @@ struct OccasionRowView: View {
 
     @ViewBuilder
     private var groupArtwork: some View {
-        if let data = occasion.coverImageData, let image = UIImage(data: data) {
+        if let data = GroupCoverStore.data(for: occasion.id), let image = UIImage(data: data) {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFill()

@@ -11,9 +11,7 @@ extension ModelContext {
     @MainActor
     func persist() {
         do {
-            if hasChanges {
-                try save()
-            }
+            try save()
             SplitBackup.save(from: self)
             KnownFriendsStore.remember(from: self)
             SyncCoordinator.shared.notifyLocalChange()

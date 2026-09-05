@@ -22,7 +22,7 @@ struct AddExpenseView: View {
     @State private var splitMethod: SplitMethod = .equal
     @State private var date = Date()
     @State private var didLoadExisting = false
-    @State private var isUpdatingSplitMethod = false
+    @State private var sharePayload: ActivitySharePayload?
 
     private var isEditing: Bool { expenseToEdit != nil }
 
@@ -48,13 +48,30 @@ struct AddExpenseView: View {
 
     private var parsedShareTotal: Decimal {
         selectedMembers.reduce(0) { partial, person in
-            partial + (decimalValue(for: person.id) ?? 0)
+            partial + (decimalValue(for: person.id, allowingZero: splitMethod == .percentage) ?? 0)
         }
     }
 
     private var isPercentageValid: Bool {
         let diff = parsedShareTotal - 100
         return diff >= -0.01 && diff <= 0.01
+    }
+
+    private var previewOwed: [UUID: Decimal] {
+        guard let amount else { return [:] }
+        let people = selectedMembers
+        guard !people.isEmpty else { return [:] }
+
+        let weights: [(id: UUID, weight: Decimal)]
+        switch splitMethod {
+        case .equal:
+            weights = people.map { ($0.id, 1) }
+        case .percentage:
+            weights = people.map { ($0.id, decimalValue(for: $0.id, allowingZero: true) ?? 0) }
+        case .parts:
+            weights = people.map { ($0.id, decimalValue(for: $0.id) ?? 0) }
+        }
+        return MoneySplit.distribute(total: amount, weights: weights)
     }
 
     private var formattedShareTotal: String {
@@ -75,7 +92,8 @@ struct AddExpenseView: View {
         case .equal:
             return true
         case .percentage:
-            guard selectedMembers.allSatisfy({ (decimalValue(for: $0.id) ?? 0) > 0 }) else { return false }
+            let percents = selectedMembers.map { decimalValue(for: $0.id, allowingZero: true) }
+            guard percents.allSatisfy({ $0 != nil }) else { return false }
             return isPercentageValid
         case .parts:
             return selectedMembers.allSatisfy { (decimalValue(for: $0.id) ?? 0) > 0 }
@@ -98,8 +116,10 @@ struct AddExpenseView: View {
 
                 Section("Expense") {
                     TextField("What was it? (e.g. Dinner)", text: $title)
+                        .accessibilityIdentifier("expenseTitleField")
                     TextField("Amount (e.g. 55 or $55)", text: $amountText)
                         .keyboardType(.decimalPad)
+                        .accessibilityIdentifier("expenseAmountField")
                     DatePicker("Date", selection: $date, displayedComponents: .date)
                 }
 
@@ -122,7 +142,7 @@ struct AddExpenseView: View {
                 }
 
                 Section {
-                    Picker("Split method", selection: $splitMethod) {
+                    Picker("Split method", selection: splitMethodBinding) {
                         ForEach(SplitMethod.allCases) { method in
                             Text(method.title).tag(method)
                         }
@@ -188,6 +208,20 @@ struct AddExpenseView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task {
+                            sharePayload = await SplitShare.activityPayload(for: occasion)
+                        }
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isEditing ? "Save" : "Add") { save() }
+                        .fontWeight(.semibold)
+                        .disabled(!canSave)
+                }
             }
             .freeSplitListStyle()
             .freeSplitBackground()
@@ -195,12 +229,22 @@ struct AddExpenseView: View {
             .onAppear {
                 loadExistingIfNeeded()
             }
-            .onChange(of: splitMethod) { _, newMethod in
-                guard !isUpdatingSplitMethod else { return }
-                shareValues = [:]
-                ensureDefaultShares(for: Array(selectedParticipantIDs), method: newMethod)
+            .sheet(item: $sharePayload) { payload in
+                ActivityShareSheet(payload: payload)
             }
         }
+    }
+
+    private var splitMethodBinding: Binding<SplitMethod> {
+        Binding(
+            get: { splitMethod },
+            set: { newValue in
+                guard newValue != splitMethod else { return }
+                splitMethod = newValue
+                shareValues = [:]
+                ensureDefaultShares(for: Array(selectedParticipantIDs), method: newValue)
+            }
+        )
     }
 
     @ViewBuilder
@@ -226,6 +270,11 @@ struct AddExpenseView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
+                    if let owed = previewOwed[person.id] {
+                        Text(CurrencyFormat.string(from: owed))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
                     TextField(
                         splitMethod == .percentage ? "0" : "1",
                         text: binding(for: person.id)
@@ -242,6 +291,10 @@ struct AddExpenseView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
+            } else if isSelected, splitMethod == .equal, let owed = previewOwed[person.id] {
+                Text("Owes \(CurrencyFormat.string(from: owed))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 2)
@@ -252,7 +305,7 @@ struct AddExpenseView: View {
         case .equal:
             return Text("Each selected person owes an equal share.")
         case .percentage:
-            return Text("Enter each person's percent. Total must equal 100%.")
+            return Text("Percents must add up to 100%. With two people, the other share fills in automatically.")
         case .parts:
             return Text("Enter parts for each person. Example: Mom 2, Dad 1 → Mom pays 2/3.")
         }
@@ -261,25 +314,62 @@ struct AddExpenseView: View {
     private func binding(for id: UUID) -> Binding<String> {
         Binding(
             get: { shareValues[id] ?? "" },
-            set: { shareValues[id] = $0 }
+            set: { newValue in
+                shareValues[id] = newValue
+                if splitMethod == .percentage {
+                    fillOtherPercent(afterEditing: id)
+                }
+            }
         )
     }
 
-    private func decimalValue(for id: UUID) -> Decimal? {
+    private func decimalValue(for id: UUID, allowingZero: Bool = false) -> Decimal? {
         guard let raw = shareValues[id]?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty else { return nil }
         let cleaned = raw.replacingOccurrences(of: ",", with: "")
-        guard let value = Decimal(string: cleaned), value > 0 else { return nil }
-        return value
+        guard let value = Decimal(string: cleaned) else { return nil }
+        if allowingZero {
+            return value >= 0 ? value : nil
+        }
+        return value > 0 ? value : nil
+    }
+
+    private func percentString(from value: Decimal) -> String {
+        let number = NSDecimalNumber(decimal: value)
+        let formatter = NumberFormatter()
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 2
+        return formatter.string(from: number) ?? "\(number)"
+    }
+
+    /// With exactly two people, the other percent is always 100% minus the one you typed.
+    private func fillOtherPercent(afterEditing id: UUID) {
+        let selected = Array(selectedParticipantIDs)
+        guard selected.count == 2, let other = selected.first(where: { $0 != id }) else { return }
+        guard let entered = decimalValue(for: id, allowingZero: true) else { return }
+        let clamped = min(max(entered, 0), 100)
+        if clamped != entered {
+            shareValues[id] = percentString(from: clamped)
+        }
+        shareValues[other] = percentString(from: 100 - clamped)
     }
 
     private func toggleParticipant(_ id: UUID) {
         if selectedParticipantIDs.contains(id) {
             selectedParticipantIDs.remove(id)
             shareValues[id] = nil
+            if splitMethod == .percentage, selectedParticipantIDs.count == 1, let remaining = selectedParticipantIDs.first {
+                shareValues[remaining] = "100"
+            }
         } else {
             selectedParticipantIDs.insert(id)
             ensureDefaultShares(for: [id])
+            if splitMethod == .percentage, selectedParticipantIDs.count == 2 {
+                if let other = selectedParticipantIDs.first(where: { $0 != id }),
+                   decimalValue(for: other, allowingZero: true) != nil {
+                    fillOtherPercent(afterEditing: other)
+                }
+            }
         }
     }
 
@@ -287,20 +377,32 @@ struct AddExpenseView: View {
         let method = method ?? splitMethod
         guard method != .equal else { return }
 
-        let selected = ids.filter { selectedParticipantIDs.contains($0) }
-        guard !selected.isEmpty else { return }
+        let selectedIDs = Array(selectedParticipantIDs)
+        guard !selectedIDs.isEmpty else { return }
 
         if method == .percentage {
-            let even = (100 / selected.count)
-            let remainder = 100 - (even * selected.count)
-            for (index, id) in selected.enumerated() {
+            if selectedIDs.count == 1, let only = selectedIDs.first {
+                shareValues[only] = "100"
+                return
+            }
+            if selectedIDs.count == 2 {
+                let filled = selectedIDs.compactMap { id -> (UUID, Decimal)? in
+                    guard let value = decimalValue(for: id, allowingZero: true) else { return nil }
+                    return (id, value)
+                }
+                if filled.count == 1 {
+                    fillOtherPercent(afterEditing: filled[0].0)
+                    return
+                }
+            }
+            let percents = MoneySplit.evenPercents(count: selectedIDs.count)
+            for (id, percent) in zip(selectedIDs, percents) {
                 if shareValues[id] == nil || shareValues[id]?.isEmpty == true {
-                    let value = index == 0 ? even + remainder : even
-                    shareValues[id] = "\(value)"
+                    shareValues[id] = percentString(from: percent)
                 }
             }
         } else if method == .parts {
-            for id in selected where shareValues[id] == nil || shareValues[id]?.isEmpty == true {
+            for id in ids where selectedParticipantIDs.contains(id) && (shareValues[id] == nil || shareValues[id]?.isEmpty == true) {
                 shareValues[id] = "1"
             }
         }
@@ -311,7 +413,6 @@ struct AddExpenseView: View {
         didLoadExisting = true
 
         if let expense = expenseToEdit {
-            isUpdatingSplitMethod = true
             title = expense.title
             amountText = NSDecimalNumber(decimal: expense.amount).stringValue
             date = expense.date
@@ -325,7 +426,9 @@ struct AddExpenseView: View {
                 loadedShares[personID] = NSDecimalNumber(decimal: share.value).stringValue
             }
             shareValues = loadedShares
-            isUpdatingSplitMethod = false
+            if splitMethod != .equal, loadedShares.isEmpty {
+                ensureDefaultShares(for: Array(selectedParticipantIDs), method: splitMethod)
+            }
         } else {
             if paidByID == nil {
                 paidByID = sortedMembers.first?.id
@@ -349,7 +452,7 @@ struct AddExpenseView: View {
             expense.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
             expense.amount = amount
             expense.date = date
-            expense.splitMethod = splitMethod
+            expense.splitMethodRaw = splitMethod.rawValue
             expense.paidBy = payer
             expense.participants = participants
             replaceShares(on: expense, participants: participants)
@@ -363,9 +466,9 @@ struct AddExpenseView: View {
                 participants: participants,
                 shares: []
             )
-            applyShares(to: expense, participants: participants)
             expense.occasion = occasion
             modelContext.insert(expense)
+            applyShares(to: expense, participants: participants)
         }
 
         occasion.touch()
@@ -374,7 +477,8 @@ struct AddExpenseView: View {
     }
 
     private func replaceShares(on expense: Expense, participants: [Person]) {
-        for share in expense.shares {
+        let existing = Array(expense.shares)
+        for share in existing {
             modelContext.delete(share)
         }
         expense.shares = []
@@ -383,9 +487,17 @@ struct AddExpenseView: View {
 
     private func applyShares(to expense: Expense, participants: [Person]) {
         guard splitMethod != .equal else { return }
+        var next: [ExpenseShare] = []
         for person in participants {
-            guard let value = decimalValue(for: person.id) else { continue }
-            expense.shares.append(ExpenseShare(person: person, value: value))
+            let value = splitMethod == .percentage
+                ? decimalValue(for: person.id, allowingZero: true)
+                : decimalValue(for: person.id)
+            guard let value else { continue }
+            let share = ExpenseShare(person: person, value: value)
+            share.expense = expense
+            modelContext.insert(share)
+            next.append(share)
         }
+        expense.shares = next
     }
 }
