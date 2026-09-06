@@ -37,7 +37,15 @@ struct FreeSplitUnlimitedApp: App {
     private let container: ModelContainer?
 
     init() {
-        container = Self.makeContainer()
+        let container = Self.makeContainer()
+        self.container = container
+        // Restore and attach before any @Query view exists. Inserting a
+        // backup after Home is on screen traps SwiftData on the main thread.
+        if let container {
+            SplitBackup.restoreIfNeeded(into: container.mainContext)
+            IncomingSplitOpener.shared.attach(context: container.mainContext)
+            SyncCoordinator.shared.attach(context: container.mainContext)
+        }
     }
 
     var body: some Scene {
@@ -145,7 +153,10 @@ private struct RootView: View {
     let container: ModelContainer
     @ObservedObject private var session = AuthSession.shared
     @Environment(\.scenePhase) private var scenePhase
-    @State private var didFinishFirstAppear = false
+
+    init(container: ModelContainer) {
+        self.container = container
+    }
 
     var body: some View {
         Group {
@@ -163,22 +174,18 @@ private struct RootView: View {
             }
             IncomingSplitOpener.shared.attach(context: container.mainContext)
             SyncCoordinator.shared.attach(context: container.mainContext)
-            DispatchQueue.main.async {
-                didFinishFirstAppear = true
-            }
         }
         .onOpenURL { url in
             IncomingURLCapture.capture(url)
             IncomingSplitOpener.shared.flushWhenReady()
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, didFinishFirstAppear else { return }
+            guard phase == .active else { return }
             IncomingSplitOpener.shared.attach(context: container.mainContext)
-            if session.isAuthenticated {
-                SyncCoordinator.shared.resume()
-            }
+            SyncCoordinator.shared.resume()
         }
         .onChange(of: session.isAuthenticated) { _, isAuthenticated in
+
             if isAuthenticated, !AppLaunchFlags.isUITesting {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     SyncCoordinator.shared.startNearby()

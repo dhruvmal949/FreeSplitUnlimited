@@ -285,6 +285,7 @@ struct CreateGroupView: View {
         }
 
         occasion.members = people
+        JoinCode.assignIfNeeded(to: occasion, in: modelContext)
         modelContext.insert(occasion)
         GroupCoverStore.save(coverImageData, for: occasion.id)
         modelContext.persist()

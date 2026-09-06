@@ -26,6 +26,7 @@ struct BackupOccasion: Codable {
     var updatedAt: Date = .now
     var isDeleted: Bool = false
     var groupType: String = GroupKind.other.rawValue
+    var joinCode: String = ""
     var members: [BackupPerson]
     var expenses: [BackupExpense]
 }
@@ -196,6 +197,7 @@ enum SplitBackup {
             updatedAt: occasion.updatedAt,
             isDeleted: occasion.isDeleted,
             groupType: occasion.groupType,
+            joinCode: occasion.joinCode,
             members: occasion.uniqueMembers.map {
                 BackupPerson(id: $0.id, name: $0.name, email: $0.email, phone: $0.phone)
             },
@@ -248,6 +250,9 @@ enum SplitBackup {
             existing.updatedAt = backup.updatedAt
             existing.isDeleted = backup.isDeleted
             existing.groupType = backup.groupType
+            if !backup.joinCode.isEmpty {
+                existing.joinCode = backup.joinCode
+            }
             replaceChildren(of: existing, with: backup, into: context)
             occasion = existing
         } else {
@@ -271,6 +276,7 @@ enum SplitBackup {
         )
         occasion.isDeleted = backup.isDeleted
         occasion.groupType = backup.groupType
+        occasion.joinCode = backup.joinCode
         populate(occasion, from: backup, into: context)
         context.insert(occasion)
         return occasion

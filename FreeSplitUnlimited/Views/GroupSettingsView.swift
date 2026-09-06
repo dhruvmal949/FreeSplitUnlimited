@@ -5,6 +5,7 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct GroupSettingsView: View {
     @Bindable var occasion: Occasion
@@ -17,6 +18,11 @@ struct GroupSettingsView: View {
     @State private var note = ""
     @State private var kind: GroupKind = .other
     @State private var confirmDelete = false
+
+    private var displayedCode: String {
+        let code = JoinCode.normalize(occasion.joinCode)
+        return code.isEmpty ? "—" : code
+    }
 
     var body: some View {
         NavigationStack {
@@ -32,6 +38,31 @@ struct GroupSettingsView: View {
                             }
                         }
                     }
+                }
+
+                Section {
+                    HStack {
+                        Text("Join code")
+                        Spacer()
+                        Text(displayedCode)
+                            .font(.body.weight(.semibold).monospaced())
+                            .foregroundStyle(AppTheme.deepTeal)
+                            .textSelection(.enabled)
+                    }
+                    Button {
+                        UIPasteboard.general.string = displayedCode
+                    } label: {
+                        Label("Copy code", systemImage: "doc.on.doc")
+                    }
+                    ShareLink(
+                        item: "Join my Free Split group “\(occasion.name)” with code \(displayedCode). Open Free Split → Join with Code, then stand near me with the app open."
+                    ) {
+                        Label("Share code", systemImage: "square.and.arrow.up")
+                    }
+                } header: {
+                    Text("Invite without AirDrop")
+                } footer: {
+                    Text("A friend types this code in Free Split. Keep both phones nearby with the app open so the group can sync.")
                 }
 
                 Section("People") {
@@ -66,6 +97,11 @@ struct GroupSettingsView: View {
                 name = occasion.name
                 note = occasion.note
                 kind = occasion.kind
+                let before = occasion.joinCode
+                JoinCode.assignIfNeeded(to: occasion, in: modelContext)
+                if occasion.joinCode != before {
+                    modelContext.persist()
+                }
             }
             .confirmationDialog("Delete this group?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Delete Group", role: .destructive) {
