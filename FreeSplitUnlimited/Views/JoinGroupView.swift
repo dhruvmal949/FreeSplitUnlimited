@@ -152,9 +152,7 @@ struct JoinGroupView: View {
     }
 
     private func addLocalUser(to occasion: Occasion) {
-        let name = AuthSession.shared.isGuest || AuthSession.shared.displayName.isEmpty
-            ? "Me"
-            : AuthSession.shared.displayName
+        let name = AuthSession.shared.pairingName.isEmpty ? "Me" : AuthSession.shared.pairingName
         if occasion.uniqueMembers.contains(where: {
             $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame
         }) {

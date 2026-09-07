@@ -50,6 +50,7 @@ final class AuthSession: ObservableObject {
     @Published private(set) var isGuest = false
     @Published private(set) var provider: AuthProvider = .guest
     @Published private(set) var displayName = ""
+    @Published private(set) var pairingNickname = ""
     @Published private(set) var email = ""
     @Published var lastError: String?
     @Published var rememberMe: Bool {
@@ -66,22 +67,37 @@ final class AuthSession: ObservableObject {
     /// Names that count as you when totaling balances (`Me` plus your sign-in name).
     var selfNames: [String] {
         var names = ["Me"]
-        let extra = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !extra.isEmpty,
-           extra.localizedCaseInsensitiveCompare("Me") != .orderedSame,
-           extra.localizedCaseInsensitiveCompare("Guest") != .orderedSame {
-            names.append(extra)
+        for extra in [displayName, pairingNickname] {
+            let trimmed = extra.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard FriendPairing.isUsableName(trimmed) else { continue }
+            if names.contains(where: { FriendPairing.namesMatch($0, trimmed) }) { continue }
+            names.append(trimmed)
         }
         return names
+    }
+
+    /// Name the other phone should type to connect a 1:1 split with you.
+    var pairingName: String {
+        let signedIn = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if FriendPairing.isUsableName(signedIn) { return signedIn }
+        return pairingNickname.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func setPairingNickname(_ raw: String) {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        pairingNickname = FriendPairing.isUsableName(name) ? name : ""
+        UserDefaults.standard.set(pairingNickname, forKey: Self.pairingNameKey)
     }
 
     private static let keychainService = "pramela.FreeSplitUnlimited.accounts"
     private static let keychainAccount = "localAccounts.v2"
     private static let sessionAccount = "currentSession.v1"
     private static let rememberMeKey = "freeSplit.auth.rememberMe"
+    private static let pairingNameKey = "freeSplit.auth.pairingName"
 
     private init() {
         rememberMe = UserDefaults.standard.object(forKey: Self.rememberMeKey) as? Bool ?? true
+        pairingNickname = UserDefaults.standard.string(forKey: Self.pairingNameKey) ?? ""
         restoreSession()
     }
 

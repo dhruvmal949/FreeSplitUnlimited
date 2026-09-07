@@ -132,4 +132,89 @@ final class FreeSplitUnlimitedTests: XCTestCase {
         XCTAssertFalse(occasion.isOneToOne)
         XCTAssertTrue(occasion.appearsInGroups)
     }
+
+    func testPairOccasionIDsAreSymmetric() {
+        let aliceBob = FriendPairing.occasionID("Alice", "Bob")
+        let bobAlice = FriendPairing.occasionID(" Bob ", "alice")
+        XCTAssertEqual(aliceBob, bobAlice)
+        XCTAssertEqual(
+            FriendPairing.personID("Alice", "Bob", person: "Alice"),
+            FriendPairing.personID("bob", "ALICE", person: " alice ")
+        )
+    }
+
+    func testIncomingOneToOneRewritesMeToPeerName() {
+        let backup = BackupOccasion(
+            id: UUID(),
+            name: "Alice",
+            note: "",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1),
+            isDeleted: false,
+            groupType: SplitKind.oneToOne,
+            members: [
+                BackupPerson(id: UUID(), name: "Me", email: "", phone: ""),
+                BackupPerson(id: UUID(), name: "Alice", email: "", phone: "")
+            ],
+            expenses: []
+        )
+        let prepared = FriendPairing.prepareIncoming(
+            backup,
+            peerName: "Bob",
+            selfNames: ["Me", "Alice"],
+            localOccasions: []
+        )
+        XCTAssertEqual(prepared.name, "Bob")
+        XCTAssertTrue(prepared.members.contains(where: { $0.name == "Bob" }))
+        XCTAssertTrue(prepared.members.contains(where: { $0.name == "Alice" }))
+        XCTAssertFalse(prepared.members.contains(where: { $0.name == "Me" }))
+    }
+
+    func testIncomingOneToOneMergesIntoLocalSplitWithTheSameFriend() {
+        let localID = UUID()
+        let meID = UUID()
+        let friendID = UUID()
+        let local = Occasion(name: "Bob", id: localID, groupType: SplitKind.oneToOne)
+        local.members = [Person(name: "Me", id: meID), Person(name: "Bob", id: friendID)]
+
+        let remoteExpenseID = UUID()
+        let remoteMe = UUID()
+        let remoteAlice = UUID()
+        let backup = BackupOccasion(
+            id: UUID(),
+            name: "Alice",
+            note: "",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2),
+            isDeleted: false,
+            groupType: SplitKind.oneToOne,
+            members: [
+                BackupPerson(id: remoteMe, name: "Me", email: "", phone: ""),
+                BackupPerson(id: remoteAlice, name: "Alice", email: "", phone: "")
+            ],
+            expenses: [
+                BackupExpense(
+                    id: remoteExpenseID,
+                    title: "Coffee",
+                    amount: "6",
+                    date: Date(timeIntervalSince1970: 2),
+                    splitMethodRaw: SplitMethod.equal.rawValue,
+                    paidByID: remoteMe,
+                    participantIDs: [remoteMe, remoteAlice],
+                    shares: []
+                )
+            ]
+        )
+        let prepared = FriendPairing.prepareIncoming(
+            backup,
+            peerName: "Bob",
+            selfNames: ["Me", "Alice"],
+            localOccasions: [local]
+        )
+        XCTAssertEqual(prepared.id, localID)
+        XCTAssertEqual(prepared.expenses.count, 1)
+        XCTAssertEqual(prepared.expenses.first?.id, remoteExpenseID)
+        XCTAssertEqual(prepared.expenses.first?.paidByID, friendID)
+        XCTAssertEqual(Set(prepared.expenses.first?.participantIDs ?? []), Set([meID, friendID]))
+    }
 }

@@ -29,8 +29,9 @@ private enum MeshMessage: Codable {
     case occasions([BackupOccasion])
     case joinRequest(String)
     case joinMiss(String)
+    case hello(String)
 
-    private enum Kind: String, Codable { case manifest, request, occasions, joinRequest, joinMiss }
+    private enum Kind: String, Codable { case manifest, request, occasions, joinRequest, joinMiss, hello }
     private enum CodingKeys: String, CodingKey { case kind, payload }
 
     init(from decoder: Decoder) throws {
@@ -46,6 +47,8 @@ private enum MeshMessage: Codable {
             self = .joinRequest(try container.decode(String.self, forKey: .payload))
         case .joinMiss:
             self = .joinMiss(try container.decode(String.self, forKey: .payload))
+        case .hello:
+            self = .hello(try container.decode(String.self, forKey: .payload))
         }
     }
 
@@ -67,6 +70,9 @@ private enum MeshMessage: Codable {
         case .joinMiss(let code):
             try container.encode(Kind.joinMiss, forKey: .kind)
             try container.encode(code, forKey: .payload)
+        case .hello(let name):
+            try container.encode(Kind.hello, forKey: .kind)
+            try container.encode(name, forKey: .payload)
         }
     }
 }
@@ -87,6 +93,7 @@ final class MeshSyncService: NSObject, ObservableObject {
 
     @Published private(set) var connectedPeerCount = 0
     @Published private(set) var connectedPeerNames: [String] = []
+    @Published private(set) var nearbyUserNames: [String] = []
     @Published private(set) var isRunning = false
     @Published private(set) var isConnecting = false
     @Published private(set) var lastError: String?
@@ -125,6 +132,8 @@ final class MeshSyncService: NSObject, ObservableObject {
     private var pendingInvites = Set<String>()
     private var connectingKeys = Set<String>()
     private var joinWaiters: [String: [CheckedContinuation<BackupOccasion?, Never>]] = [:]
+    private var advertisedUserNames: [String: String] = [:]
+    private var advertisedIdentity = ""
 
     private override init() {
         self.peerToken = Self.persistedPeerToken()
@@ -136,18 +145,33 @@ final class MeshSyncService: NSObject, ObservableObject {
         let peerID = myPeerID ?? MCPeerID(displayName: Self.persistedDisplayName())
         myPeerID = peerID
         let session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .optional)
+        session.delegate = self
+        self.session = session
+        rebuildAdvertiser(for: peerID)
+        let browser = MCNearbyServiceBrowser(peer: peerID, serviceType: Self.serviceType)
+        browser.delegate = self
+        self.browser = browser
+    }
+
+    private func currentDiscoveryInfo() -> [String: String] {
+        var info = ["app": "freesplit", "id": peerToken]
+        let name = String(AuthSession.shared.pairingName.prefix(40))
+        if FriendPairing.isUsableName(name) {
+            info["n"] = name
+        }
+        return info
+    }
+
+    private func rebuildAdvertiser(for peerID: MCPeerID) {
+        advertiser?.stopAdvertisingPeer()
+        advertisedIdentity = AuthSession.shared.pairingName
         let advertiser = MCNearbyServiceAdvertiser(
             peer: peerID,
-            discoveryInfo: ["app": "freesplit", "id": peerToken],
+            discoveryInfo: currentDiscoveryInfo(),
             serviceType: Self.serviceType
         )
-        let browser = MCNearbyServiceBrowser(peer: peerID, serviceType: Self.serviceType)
-        session.delegate = self
         advertiser.delegate = self
-        browser.delegate = self
-        self.session = session
         self.advertiser = advertiser
-        self.browser = browser
     }
 
     func start(context: ModelContext) {
@@ -204,7 +228,7 @@ final class MeshSyncService: NSObject, ObservableObject {
         for occasion in occasions {
             JoinCode.assignIfNeeded(to: occasion, in: context)
         }
-        let backups = occasions.map(SplitBackup.exportOccasion)
+        let backups = occasions.map(exportForMesh)
         send(.occasions(backups), to: session.connectedPeers)
     }
 
@@ -235,6 +259,9 @@ final class MeshSyncService: NSObject, ObservableObject {
 
     private func startDiscovery() {
         prepareRadiosIfNeeded()
+        if let peerID = myPeerID, advertisedIdentity != AuthSession.shared.pairingName {
+            rebuildAdvertiser(for: peerID)
+        }
         advertiser?.startAdvertisingPeer()
         browser?.startBrowsingForPeers()
     }
@@ -271,6 +298,10 @@ final class MeshSyncService: NSObject, ObservableObject {
 
     private func handleFoundPeer(_ peerID: MCPeerID, info: [String: String]?) {
         let key = peerID.displayName
+        if let name = info?["n"], FriendPairing.isUsableName(name) {
+            advertisedUserNames[key] = name
+            refreshPeerState()
+        }
         guard session?.connectedPeers.contains(peerID) == false else { return }
         guard pendingInvites.contains(key) == false else { return }
         guard shouldInvite(peerID, info: info) else { return }
@@ -303,8 +334,28 @@ final class MeshSyncService: NSObject, ObservableObject {
 
     private func refreshPeerState() {
         connectedPeerCount = session?.connectedPeers.count ?? 0
-        connectedPeerNames = session?.connectedPeers.map(\.displayName) ?? []
+        connectedPeerNames = session?.connectedPeers.map { peer in
+            advertisedUserNames[peer.displayName] ?? peer.displayName
+        } ?? []
+        nearbyUserNames = advertisedUserNames.values
+            .filter { FriendPairing.isUsableName($0) }
+            .reduce(into: [String]()) { result, name in
+                if !result.contains(where: { FriendPairing.namesMatch($0, name) }) {
+                    result.append(name)
+                }
+            }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
         isConnecting = !connectingKeys.isEmpty && connectedPeerCount == 0
+    }
+
+    private func userName(for peer: MCPeerID) -> String? {
+        advertisedUserNames[peer.displayName]
+    }
+
+    private func exportForMesh(_ occasion: Occasion) -> BackupOccasion {
+        var backup = SplitBackup.exportOccasion(occasion)
+        backup.ownerName = AuthSession.shared.pairingName
+        return backup
     }
 
     // MARK: Messaging
@@ -367,19 +418,26 @@ final class MeshSyncService: NSObject, ObservableObject {
                 return occasion.updatedAt > peerEntry.updatedAt
             }
             if !toSend.isEmpty {
-                send(.occasions(toSend.map(SplitBackup.exportOccasion)), to: [peer])
+                send(.occasions(toSend.map(exportForMesh)), to: [peer])
             }
 
         case .request(let ids):
             let localOccasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
             let matches = localOccasions.filter { ids.contains($0.id) }
             guard !matches.isEmpty else { return }
-            send(.occasions(matches.map(SplitBackup.exportOccasion)), to: [peer])
+            send(.occasions(matches.map(exportForMesh)), to: [peer])
 
         case .occasions(let backups):
             var appliedIDs: [UUID] = []
+            let peerName = userName(for: peer)
+            let selfNames = AuthSession.shared.selfNames
             for backup in backups {
-                if let updated = try? SplitBackup.upsert(backup, into: context) {
+                if let updated = try? SplitBackup.upsert(
+                    backup,
+                    into: context,
+                    peerName: peerName,
+                    selfNames: selfNames
+                ) {
                     appliedIDs.append(updated.id)
                 }
                 let code = JoinCode.normalize(backup.joinCode)
@@ -401,7 +459,7 @@ final class MeshSyncService: NSObject, ObservableObject {
             if let match = localOccasions.first(where: {
                 !$0.isDeleted && JoinCode.normalize($0.joinCode) == code
             }) {
-                send(.occasions([SplitBackup.exportOccasion(match)]), to: [peer])
+                send(.occasions([exportForMesh(match)]), to: [peer])
             } else {
                 send(.joinMiss(code), to: [peer])
             }
@@ -411,6 +469,12 @@ final class MeshSyncService: NSObject, ObservableObject {
             // peer still might answer, the 10s timeout covers it.
             if (session?.connectedPeers.count ?? 0) <= 1 {
                 finishJoinWait(JoinCode.normalize(raw), with: nil)
+            }
+
+        case .hello(let name):
+            if FriendPairing.isUsableName(name) {
+                advertisedUserNames[peer.displayName] = name
+                refreshPeerState()
             }
         }
     }
@@ -450,6 +514,10 @@ extension MeshSyncService: MCSessionDelegate {
                 self.connectingKeys.remove(peerID.displayName)
                 self.lastError = nil
                 self.refreshPeerState()
+                let myName = AuthSession.shared.pairingName
+                if FriendPairing.isUsableName(myName) {
+                    self.send(.hello(myName), to: [peerID])
+                }
                 self.sendManifest(to: peerID)
             case .connecting:
                 self.connectingKeys.insert(peerID.displayName)
