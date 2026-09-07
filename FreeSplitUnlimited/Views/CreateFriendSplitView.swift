@@ -21,6 +21,9 @@ struct CreateFriendSplitView: View {
     @State private var showingFriendPicker = false
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
     @State private var showMyNameField = false
+    @State private var savedSplitID: UUID?
+    @State private var autoSaveTask: Task<Void, Never>?
+    @State private var skipDismissSave = false
 
     private var trimmedMyName: String {
         myName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -99,9 +102,9 @@ struct CreateFriendSplitView: View {
                         .foregroundStyle(.secondary)
 
                     Button {
-                        createSplit()
+                        persistSplit(dismissAfter: true)
                     } label: {
-                        Text(nearbyMatch == nil ? "Create Split" : "Connect Split")
+                        Text(nearbyMatch == nil ? "Done" : "Connected — Done")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
@@ -121,7 +124,9 @@ struct CreateFriendSplitView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Close") {
+                        persistSplit(dismissAfter: true)
+                    }
                 }
             }
             .sheet(isPresented: $showingFriendPicker) {
@@ -149,6 +154,25 @@ struct CreateFriendSplitView: View {
             .onChange(of: trimmedMyName) { _, name in
                 guard FriendPairing.isUsableName(name) else { return }
                 auth.setPairingNickname(name)
+                scheduleAutoSave()
+            }
+            .onChange(of: trimmedFriendName) { _, _ in
+                scheduleAutoSave()
+            }
+            .onChange(of: nearbyMatch) { _, match in
+                guard match != nil else { return }
+                persistSplit(dismissAfter: false)
+            }
+            .onChange(of: showingFriendPicker) { _, isPresented in
+                if !isPresented {
+                    scheduleAutoSave()
+                }
+            }
+            .onDisappear {
+                autoSaveTask?.cancel()
+                if !skipDismissSave && !showingFriendPicker {
+                    persistSplit(dismissAfter: false)
+                }
             }
         }
         .tint(AppTheme.teal)
@@ -171,7 +195,7 @@ struct CreateFriendSplitView: View {
                     if let nearbyMatch {
                         Text("\(nearbyMatch) is nearby")
                             .font(.subheadline.weight(.semibold))
-                        Text("Create this split to connect both phones. No join code needed.")
+                        Text("This split is saved. Both phones share it automatically — no join code needed.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
@@ -204,10 +228,27 @@ struct CreateFriendSplitView: View {
         friendName = contact.name
         friendEmail = contact.email
         friendPhone = contact.phone
+        scheduleAutoSave()
     }
 
-    private func createSplit() {
-        guard canCreate else { return }
+    private func scheduleAutoSave() {
+        autoSaveTask?.cancel()
+        guard canCreate, trimmedFriendName.count >= 2 else { return }
+        autoSaveTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(650))
+            guard !Task.isCancelled else { return }
+            persistSplit(dismissAfter: false)
+        }
+    }
+
+    private func persistSplit(dismissAfter: Bool) {
+        guard canCreate else {
+            if dismissAfter {
+                skipDismissSave = true
+                dismiss()
+            }
+            return
+        }
         if FriendPairing.isUsableName(trimmedMyName) {
             auth.setPairingNickname(trimmedMyName)
         }
@@ -215,30 +256,34 @@ struct CreateFriendSplitView: View {
         let selfNames = auth.selfNames
         let localName = pairingName
         let meName = FriendPairing.isUsableName(localName) ? localName : "Me"
-        let existing = FriendPairing.existingOccasion(
+        let occasions = (try? modelContext.fetch(FetchDescriptor<Occasion>())) ?? []
+
+        if let savedSplitID,
+           let occasion = occasions.first(where: { $0.id == savedSplitID && !$0.isDeleted }) {
+            update(occasion, meName: meName, selfNames: selfNames)
+            finish(occasion.id, dismissAfter: dismissAfter)
+            return
+        }
+
+        if let existing = FriendPairing.existingOccasion(
             friendName: trimmedFriendName,
             selfNames: selfNames,
-            in: ((try? modelContext.fetch(FetchDescriptor<Occasion>())) ?? [])
-        )
-        if let existing {
-            if let friend = existing.uniqueMembers.first(where: {
-                FriendPairing.namesMatch($0.name, trimmedFriendName)
-            }) {
-                if friend.email.isEmpty { friend.email = friendEmail.trimmingCharacters(in: .whitespacesAndNewlines) }
-                if friend.phone.isEmpty { friend.phone = friendPhone.trimmingCharacters(in: .whitespacesAndNewlines) }
-            }
-            existing.touch()
-            modelContext.persist()
-            let id = existing.id
-            startConnecting()
-            dismiss()
-            onCreated(id)
+            in: occasions
+        ) {
+            update(existing, meName: meName, selfNames: selfNames)
+            finish(existing.id, dismissAfter: dismissAfter)
             return
         }
 
         let occasionID = FriendPairing.isUsableName(localName)
             ? FriendPairing.occasionID(localName, trimmedFriendName)
             : UUID()
+        if let existing = occasions.first(where: { $0.id == occasionID && !$0.isDeleted }) {
+            update(existing, meName: meName, selfNames: selfNames)
+            finish(existing.id, dismissAfter: dismissAfter)
+            return
+        }
+
         let meID = FriendPairing.isUsableName(localName)
             ? FriendPairing.personID(localName, trimmedFriendName, person: meName)
             : UUID()
@@ -262,15 +307,63 @@ struct CreateFriendSplitView: View {
         ]
         modelContext.insert(occasion)
         modelContext.persist()
-        let id = occasion.id
-        startConnecting()
+        finish(occasion.id, dismissAfter: dismissAfter)
+    }
+
+    private func update(_ occasion: Occasion, meName: String, selfNames: [String]) {
+        occasion.name = trimmedFriendName
+        if let me = occasion.uniqueMembers.first(where: {
+            FriendPairing.isSelf($0.name, selfNames: selfNames)
+        }) {
+            me.name = meName
+        }
+        if let friend = occasion.uniqueMembers.first(where: {
+            FriendPairing.namesMatch($0.name, trimmedFriendName)
+        }) ?? occasion.uniqueMembers.first(where: {
+            !FriendPairing.isSelf($0.name, selfNames: selfNames)
+        }) {
+            friend.name = trimmedFriendName
+            if friend.email.isEmpty {
+                friend.email = friendEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if friend.phone.isEmpty {
+                friend.phone = friendPhone.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        realignPairingIDs(occasion, meName: meName, selfNames: selfNames)
+        occasion.touch()
+        modelContext.persist()
+    }
+
+    /// Keep the deterministic pair IDs in sync as the typed name grows from "Al" to "Alex".
+    private func realignPairingIDs(_ occasion: Occasion, meName: String, selfNames: [String]) {
+        let localName = pairingName
+        guard FriendPairing.isUsableName(localName), occasion.expenses.isEmpty else { return }
+        let nextOccasionID = FriendPairing.occasionID(localName, trimmedFriendName)
+        if occasion.id != nextOccasionID {
+            occasion.id = nextOccasionID
+        }
+        if let me = occasion.uniqueMembers.first(where: { FriendPairing.isSelf($0.name, selfNames: selfNames) }) {
+            me.id = FriendPairing.personID(localName, trimmedFriendName, person: meName)
+        }
+        if let friend = occasion.uniqueMembers.first(where: { !FriendPairing.isSelf($0.name, selfNames: selfNames) }) {
+            friend.id = FriendPairing.personID(localName, trimmedFriendName, person: trimmedFriendName)
+        }
+        savedSplitID = occasion.id
+    }
+
+    private func finish(_ id: UUID, dismissAfter: Bool) {
+        savedSplitID = id
+        startConnectingIfNeeded()
+        guard dismissAfter else { return }
+        skipDismissSave = true
         dismiss()
         onCreated(id)
     }
 
-    private func startConnecting() {
+    private func startConnectingIfNeeded() {
         guard !AppLaunchFlags.isUITesting else { return }
         SyncCoordinator.shared.startNearby()
-        MeshSyncService.shared.restartDiscovery()
+        MeshSyncService.shared.broadcastLocalChanges()
     }
 }

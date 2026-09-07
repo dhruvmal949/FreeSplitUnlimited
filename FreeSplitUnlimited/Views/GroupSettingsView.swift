@@ -18,6 +18,8 @@ struct GroupSettingsView: View {
     @State private var note = ""
     @State private var kind: GroupKind = .other
     @State private var confirmDelete = false
+    @State private var autoSaveTask: Task<Void, Never>?
+    @State private var isHydrating = true
 
     private var displayedCode: String {
         let code = JoinCode.normalize(occasion.joinCode)
@@ -86,14 +88,11 @@ struct GroupSettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Done") { saveAndDismiss() }
                 }
             }
             .onAppear {
+                isHydrating = true
                 name = occasion.name
                 note = occasion.note
                 kind = occasion.kind
@@ -102,6 +101,16 @@ struct GroupSettingsView: View {
                 if occasion.joinCode != before {
                     modelContext.persist()
                 }
+                DispatchQueue.main.async {
+                    isHydrating = false
+                }
+            }
+            .onChange(of: name) { _, _ in scheduleAutoSave() }
+            .onChange(of: note) { _, _ in scheduleAutoSave() }
+            .onChange(of: kind) { _, _ in scheduleAutoSave() }
+            .onDisappear {
+                autoSaveTask?.cancel()
+                saveIfNeeded()
             }
             .confirmationDialog("Delete this group?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Delete Group", role: .destructive) {
@@ -119,14 +128,36 @@ struct GroupSettingsView: View {
         .tint(AppTheme.teal)
     }
 
-    private func save() {
-        occasion.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        occasion.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func scheduleAutoSave() {
+        autoSaveTask?.cancel()
+        guard !isHydrating else { return }
+        autoSaveTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            saveIfNeeded()
+        }
+    }
+
+    private func saveAndDismiss() {
+        autoSaveTask?.cancel()
+        saveIfNeeded()
+        dismiss()
+    }
+
+    private func saveIfNeeded() {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return }
+        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextKind = occasion.isOneToOne ? occasion.groupType : kind.rawValue
+        let kindChanged = !occasion.isOneToOne && occasion.groupType != kind.rawValue
+        guard trimmedName != occasion.name || trimmedNote != occasion.note || kindChanged else { return }
+        occasion.name = trimmedName
+        occasion.note = trimmedNote
         if !occasion.isOneToOne {
-            occasion.groupType = kind.rawValue
+            occasion.groupType = nextKind
         }
         occasion.touch()
         modelContext.persist()
-        dismiss()
     }
+
 }
