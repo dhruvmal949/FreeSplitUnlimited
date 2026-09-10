@@ -20,6 +20,7 @@ struct GroupSettingsView: View {
     @State private var confirmDelete = false
     @State private var autoSaveTask: Task<Void, Never>?
     @State private var isHydrating = true
+    @State private var skipSaveOnDismiss = false
 
     private var displayedCode: String {
         let code = JoinCode.normalize(occasion.joinCode)
@@ -110,10 +111,14 @@ struct GroupSettingsView: View {
             .onChange(of: kind) { _, _ in scheduleAutoSave() }
             .onDisappear {
                 autoSaveTask?.cancel()
-                saveIfNeeded()
+                if !skipSaveOnDismiss && !occasion.isDeleted {
+                    saveIfNeeded()
+                }
             }
             .confirmationDialog("Delete this group?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Delete Group", role: .destructive) {
+                    skipSaveOnDismiss = true
+                    autoSaveTask?.cancel()
                     occasion.isDeleted = true
                     occasion.touch()
                     modelContext.persist()
@@ -145,6 +150,7 @@ struct GroupSettingsView: View {
     }
 
     private func saveIfNeeded() {
+        guard !occasion.isDeleted else { return }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
         let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)

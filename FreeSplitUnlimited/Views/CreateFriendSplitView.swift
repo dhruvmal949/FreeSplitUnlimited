@@ -22,7 +22,9 @@ struct CreateFriendSplitView: View {
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
     @State private var showMyNameField = false
     @State private var savedSplitID: UUID?
-    @State private var autoSaveTask: Task<Void, Never>?
+    @State private var createdInSession = false
+    @State private var didConnectNearby = false
+    @State private var discardOnDismiss = false
     @State private var skipDismissSave = false
 
     private var trimmedMyName: String {
@@ -124,8 +126,8 @@ struct CreateFriendSplitView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        persistSplit(dismissAfter: true)
+                    Button("Cancel") {
+                        discardDraft()
                     }
                 }
             }
@@ -154,23 +156,14 @@ struct CreateFriendSplitView: View {
             .onChange(of: trimmedMyName) { _, name in
                 guard FriendPairing.isUsableName(name) else { return }
                 auth.setPairingNickname(name)
-                scheduleAutoSave()
-            }
-            .onChange(of: trimmedFriendName) { _, _ in
-                scheduleAutoSave()
             }
             .onChange(of: nearbyMatch) { _, match in
                 guard match != nil else { return }
+                didConnectNearby = true
                 persistSplit(dismissAfter: false)
             }
-            .onChange(of: showingFriendPicker) { _, isPresented in
-                if !isPresented {
-                    scheduleAutoSave()
-                }
-            }
             .onDisappear {
-                autoSaveTask?.cancel()
-                if !skipDismissSave && !showingFriendPicker {
+                if !discardOnDismiss && !skipDismissSave && !showingFriendPicker {
                     persistSplit(dismissAfter: false)
                 }
             }
@@ -228,17 +221,22 @@ struct CreateFriendSplitView: View {
         friendName = contact.name
         friendEmail = contact.email
         friendPhone = contact.phone
-        scheduleAutoSave()
     }
 
-    private func scheduleAutoSave() {
-        autoSaveTask?.cancel()
-        guard canCreate, trimmedFriendName.count >= 2 else { return }
-        autoSaveTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(650))
-            guard !Task.isCancelled else { return }
-            persistSplit(dismissAfter: false)
+    private func discardDraft() {
+        discardOnDismiss = true
+        skipDismissSave = true
+        if createdInSession,
+           !didConnectNearby,
+           let savedSplitID,
+           let draft = ((try? modelContext.fetch(FetchDescriptor<Occasion>())) ?? [])
+            .first(where: { $0.id == savedSplitID && !$0.isDeleted }),
+           draft.expenses.isEmpty {
+            draft.isDeleted = true
+            draft.touch()
+            modelContext.persist()
         }
+        dismiss()
     }
 
     private func persistSplit(dismissAfter: Bool) {
@@ -258,20 +256,23 @@ struct CreateFriendSplitView: View {
         let meName = FriendPairing.isUsableName(localName) ? localName : "Me"
         let occasions = (try? modelContext.fetch(FetchDescriptor<Occasion>())) ?? []
 
-        if let savedSplitID,
-           let occasion = occasions.first(where: { $0.id == savedSplitID && !$0.isDeleted }) {
-            update(occasion, meName: meName, selfNames: selfNames)
-            finish(occasion.id, dismissAfter: dismissAfter)
-            return
-        }
-
-        if let existing = FriendPairing.existingOccasion(
+        let target = FriendPairing.resolveTarget(
             friendName: trimmedFriendName,
+            savedID: savedSplitID,
+            createdInSession: createdInSession,
             selfNames: selfNames,
             in: occasions
-        ) {
-            update(existing, meName: meName, selfNames: selfNames)
-            finish(existing.id, dismissAfter: dismissAfter)
+        )
+        if let abandon = target.abandon {
+            abandon.isDeleted = true
+            abandon.touch()
+        }
+        if let occasion = target.occasion {
+            if occasion.id != savedSplitID {
+                createdInSession = false
+            }
+            update(occasion, meName: meName, selfNames: selfNames)
+            finish(occasion.id, dismissAfter: dismissAfter)
             return
         }
 
@@ -279,6 +280,7 @@ struct CreateFriendSplitView: View {
             ? FriendPairing.occasionID(localName, trimmedFriendName)
             : UUID()
         if let existing = occasions.first(where: { $0.id == occasionID && !$0.isDeleted }) {
+            createdInSession = false
             update(existing, meName: meName, selfNames: selfNames)
             finish(existing.id, dismissAfter: dismissAfter)
             return
@@ -306,6 +308,7 @@ struct CreateFriendSplitView: View {
             )
         ]
         modelContext.insert(occasion)
+        createdInSession = true
         modelContext.persist()
         finish(occasion.id, dismissAfter: dismissAfter)
     }

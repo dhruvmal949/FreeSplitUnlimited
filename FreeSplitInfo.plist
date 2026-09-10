@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDisplayName</key>
+	<string>Free Split</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -46,13 +48,34 @@
 			</array>
 		</dict>
 	</array>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>venmo</string>
+		<string>cashme</string>
+		<string>squarecash</string>
+		<string>paypal</string>
+	</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<false/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_freesplit-mesh._tcp</string>
 		<string>_freesplit-mesh._udp</string>
 	</array>
+	<key>NSContactsUsageDescription</key>
+	<string>Free Split uses your contacts so you can add friends to a split. You can allow all contacts or only the ones you choose.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Free Split uses your local network to sync splits directly with nearby friends' phones — no internet or AirDrop needed.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Free Split uses your photos so you can add a picture to a group.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
+	<key>UISupportsDocumentBrowser</key>
+	<false/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
@@ -77,34 +100,6 @@
 				</array>
 			</dict>
 		</dict>
-	</array>
-	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<false/>
-	<key>UISupportsDocumentBrowser</key>
-	<false/>
-	<key>UIFileSharingEnabled</key>
-	<true/>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_freesplit-mesh._tcp</string>
-		<string>_freesplit-mesh._udp</string>
-	</array>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Free Split uses your local network to sync splits directly with nearby friends' phones — no internet or AirDrop needed.</string>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.</string>
-	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.</string>
-	<key>NSContactsUsageDescription</key>
-	<string>Free Split uses your contacts so you can add friends to a split. You can allow all contacts or only the ones you choose.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Free Split uses your photos so you can add a picture to a group.</string>
-	<key>LSApplicationQueriesSchemes</key>
-	<array>
-		<string>venmo</string>
-		<string>cashme</string>
-		<string>squarecash</string>
-		<string>paypal</string>
 	</array>
 </dict>
 </plist>

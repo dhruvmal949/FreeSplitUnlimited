@@ -73,27 +73,21 @@ enum PaymentTransfer {
         myNames: [String],
         context: ModelContext
     ) -> String? {
-        guard amount > 0 else { return "Nothing to pay." }
-        guard let payer = person(namedIn: myNames, occasion: occasion) else {
-            return "Add yourself to this group before recording a payment."
-        }
-        guard let payee = person(named: payeeName, occasion: occasion) else {
-            return "\(payeeName) isn’t in this group."
-        }
-        guard payer.id != payee.id else { return "You can’t pay yourself." }
-
-        let expense = Expense(
-            title: "Paid \(payee.name)",
+        if let error = validationError(
+            payeeName: payeeName,
             amount: amount,
-            date: .now,
-            splitMethod: .equal,
-            paidBy: payer,
-            participants: [payee],
-            shares: []
+            in: occasion,
+            myNames: myNames
+        ) {
+            return error
+        }
+        insertSettlement(
+            payeeName: payeeName,
+            amount: amount,
+            in: occasion,
+            myNames: myNames,
+            context: context
         )
-        expense.occasion = occasion
-        context.insert(expense)
-        occasion.touch()
         return nil
     }
 
@@ -104,19 +98,29 @@ enum PaymentTransfer {
         myNames: [String],
         context: ModelContext
     ) -> String? {
+        var jobs: [(occasion: Occasion, amount: Decimal)] = []
         for leg in request.legs {
             guard let occasion = occasions.first(where: { $0.id == leg.occasionID }) else {
                 return "Couldn’t find that group."
             }
-            if let error = record(
+            if let error = validationError(
                 payeeName: request.payeeName,
                 amount: leg.amount,
                 in: occasion,
-                myNames: myNames,
-                context: context
+                myNames: myNames
             ) {
                 return error
             }
+            jobs.append((occasion, leg.amount))
+        }
+        for job in jobs {
+            insertSettlement(
+                payeeName: request.payeeName,
+                amount: job.amount,
+                in: job.occasion,
+                myNames: myNames,
+                context: context
+            )
         }
         context.persist()
         return nil
@@ -168,6 +172,46 @@ enum PaymentTransfer {
         formatter.minimumFractionDigits = 2
         formatter.maximumFractionDigits = 2
         return formatter.string(from: amount as NSDecimalNumber) ?? "\(amount)"
+    }
+
+    private static func validationError(
+        payeeName: String,
+        amount: Decimal,
+        in occasion: Occasion,
+        myNames: [String]
+    ) -> String? {
+        guard amount > 0 else { return "Nothing to pay." }
+        guard let payer = person(namedIn: myNames, occasion: occasion) else {
+            return "Add yourself to this group before recording a payment."
+        }
+        guard let payee = person(named: payeeName, occasion: occasion) else {
+            return "\(payeeName) isn’t in this group."
+        }
+        guard payer.id != payee.id else { return "You can’t pay yourself." }
+        return nil
+    }
+
+    private static func insertSettlement(
+        payeeName: String,
+        amount: Decimal,
+        in occasion: Occasion,
+        myNames: [String],
+        context: ModelContext
+    ) {
+        guard let payer = person(namedIn: myNames, occasion: occasion),
+              let payee = person(named: payeeName, occasion: occasion) else { return }
+        let expense = Expense(
+            title: "Paid \(payee.name)",
+            amount: amount,
+            date: .now,
+            splitMethod: .equal,
+            paidBy: payer,
+            participants: [payee],
+            shares: []
+        )
+        expense.occasion = occasion
+        context.insert(expense)
+        occasion.touch()
     }
 
     private static func person(named name: String, occasion: Occasion) -> Person? {

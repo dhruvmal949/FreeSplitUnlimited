@@ -217,4 +217,54 @@ final class FreeSplitUnlimitedTests: XCTestCase {
         XCTAssertEqual(prepared.expenses.first?.paidByID, friendID)
         XCTAssertEqual(Set(prepared.expenses.first?.participantIDs ?? []), Set([meID, friendID]))
     }
+
+    func testResolveTargetPrefersExistingFriendOverPrefixDraft() {
+        let bob = Occasion(name: "Bob", groupType: SplitKind.oneToOne)
+        bob.members = [Person(name: "Me"), Person(name: "Bob")]
+        let draft = Occasion(name: "Bo", groupType: SplitKind.oneToOne)
+        draft.members = [Person(name: "Me"), Person(name: "Bo")]
+
+        let target = FriendPairing.resolveTarget(
+            friendName: "Bob",
+            savedID: draft.id,
+            createdInSession: true,
+            selfNames: ["Me"],
+            in: [bob, draft]
+        )
+
+        XCTAssertEqual(target.occasion?.id, bob.id)
+        XCTAssertEqual(target.abandon?.id, draft.id)
+    }
+
+    func testResolveTargetDoesNotRewriteADifferentFriend() {
+        let bob = Occasion(name: "Bob", groupType: SplitKind.oneToOne)
+        bob.members = [Person(name: "Me"), Person(name: "Bob")]
+
+        let target = FriendPairing.resolveTarget(
+            friendName: "Alice",
+            savedID: bob.id,
+            createdInSession: false,
+            selfNames: ["Me"],
+            in: [bob]
+        )
+
+        XCTAssertNil(target.occasion)
+        XCTAssertNil(target.abandon)
+    }
+
+    func testResolveTargetRenamesEmptyDraftWhenNameChanges() {
+        let draft = Occasion(name: "Bo", groupType: SplitKind.oneToOne)
+        draft.members = [Person(name: "Me"), Person(name: "Bo")]
+
+        let target = FriendPairing.resolveTarget(
+            friendName: "Alice",
+            savedID: draft.id,
+            createdInSession: true,
+            selfNames: ["Me"],
+            in: [draft]
+        )
+
+        XCTAssertEqual(target.occasion?.id, draft.id)
+        XCTAssertNil(target.abandon)
+    }
 }

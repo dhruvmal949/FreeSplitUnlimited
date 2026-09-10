@@ -28,6 +28,8 @@ struct AddExpenseView: View {
     @State private var skipDismissSave = false
     @State private var isHydrating = false
     @State private var autoSaveTask: Task<Void, Never>?
+    @State private var originalSnapshot: ExpenseSnapshot?
+    @State private var didPersistEdits = false
 
     private var isEditing: Bool { expenseToEdit != nil }
 
@@ -448,6 +450,7 @@ struct AddExpenseView: View {
             if splitMethod != .equal, loadedShares.isEmpty {
                 ensureDefaultShares(for: Array(selectedParticipantIDs), method: splitMethod)
             }
+            originalSnapshot = ExpenseSnapshot(from: expense)
         } else {
             if paidByID == nil {
                 paidByID = sortedMembers.first?.id
@@ -484,6 +487,10 @@ struct AddExpenseView: View {
             modelContext.delete(created)
             occasion.touch()
             modelContext.persist()
+        } else if let expense = expenseToEdit,
+                  let originalSnapshot,
+                  didPersistEdits {
+            restore(originalSnapshot, onto: expense)
         }
         dismiss()
     }
@@ -531,6 +538,34 @@ struct AddExpenseView: View {
 
         occasion.touch()
         modelContext.persist()
+        didPersistEdits = true
+    }
+
+    private func restore(_ snapshot: ExpenseSnapshot, onto expense: Expense) {
+        expense.title = snapshot.title
+        expense.amount = snapshot.amount
+        expense.date = snapshot.date
+        expense.splitMethodRaw = snapshot.splitMethodRaw
+        expense.paidBy = sortedMembers.first(where: { $0.id == snapshot.paidByID })
+        expense.participants = sortedMembers.filter { snapshot.participantIDs.contains($0.id) }
+        let existing = Array(expense.shares)
+        for share in existing {
+            modelContext.delete(share)
+        }
+        expense.shares = []
+        if snapshot.splitMethod != .equal {
+            var next: [ExpenseShare] = []
+            for person in expense.participants {
+                guard let value = snapshot.shareValues[person.id] else { continue }
+                let share = ExpenseShare(person: person, value: value)
+                share.expense = expense
+                modelContext.insert(share)
+                next.append(share)
+            }
+            expense.shares = next
+        }
+        occasion.touch()
+        modelContext.persist()
     }
 
     private func replaceShares(on expense: Expense, participants: [Person]) {
@@ -556,5 +591,35 @@ struct AddExpenseView: View {
             next.append(share)
         }
         expense.shares = next
+    }
+}
+
+private struct ExpenseSnapshot {
+    let title: String
+    let amount: Decimal
+    let date: Date
+    let splitMethodRaw: String
+    let paidByID: UUID?
+    let participantIDs: [UUID]
+    let shareValues: [UUID: Decimal]
+
+    var splitMethod: SplitMethod {
+        SplitMethod(rawValue: splitMethodRaw) ?? .equal
+    }
+
+    init(from expense: Expense) {
+        title = expense.title
+        amount = expense.amount
+        date = expense.date
+        splitMethodRaw = expense.splitMethodRaw
+        paidByID = expense.paidBy?.id
+        participantIDs = expense.uniqueParticipants.map(\.id)
+        var values: [UUID: Decimal] = [:]
+        for share in expense.shares {
+            if let id = share.person?.id {
+                values[id] = share.value
+            }
+        }
+        shareValues = values
     }
 }

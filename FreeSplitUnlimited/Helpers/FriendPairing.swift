@@ -64,6 +64,38 @@ enum FriendPairing {
         }
     }
 
+    /// Picks which local 1:1 to update so a prefix draft ("Bo") does not
+    /// duplicate an existing friend ("Bob"), and so changing the typed name
+    /// does not rewrite a different friend's split.
+    static func resolveTarget(
+        friendName: String,
+        savedID: UUID?,
+        createdInSession: Bool,
+        selfNames: [String],
+        in occasions: [Occasion]
+    ) -> (occasion: Occasion?, abandon: Occasion?) {
+        let live = occasions.filter { !$0.isDeleted }
+        let existing = existingOccasion(friendName: friendName, selfNames: selfNames, in: live)
+        let draft = savedID.flatMap { id in live.first(where: { $0.id == id }) }
+
+        if let existing {
+            let shouldAbandon = createdInSession
+                && draft != nil
+                && draft?.id != existing.id
+                && (draft?.expenses.isEmpty ?? true)
+            return (existing, shouldAbandon ? draft : nil)
+        }
+
+        if let draft {
+            let friendMatches = draft.uniqueMembers.contains { namesMatch($0.name, friendName) }
+            if friendMatches || (createdInSession && draft.expenses.isEmpty) {
+                return (draft, nil)
+            }
+        }
+
+        return (nil, nil)
+    }
+
     /// Incoming 1:1 from a nearby phone: rewrite "Me" to their name, and fold
     /// it into a local 1:1 with that friend so both phones share one split.
     static func prepareIncoming(
