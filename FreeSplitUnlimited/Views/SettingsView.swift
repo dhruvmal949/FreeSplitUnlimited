@@ -24,6 +24,13 @@ struct SettingsView: View {
         }
     }
 
+    private var accountLabel: String {
+        if AuthSession.shared.isGuest { return "Guest" }
+        let name = AuthSession.shared.displayName
+        if !name.isEmpty { return name }
+        return AuthSession.shared.provider.title
+    }
+
     var body: some View {
         Form {
                 Section("Nearby sync") {
@@ -58,8 +65,22 @@ struct SettingsView: View {
                     HStack {
                         Text("Signed in as")
                         Spacer()
-                        Text(AuthSession.shared.isGuest ? "Guest" : AuthSession.shared.username)
+                        Text(accountLabel)
                             .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("Sign-in method")
+                        Spacer()
+                        Text(AuthSession.shared.provider.title)
+                            .foregroundStyle(.secondary)
+                    }
+                    if !AuthSession.shared.isGuest, !AuthSession.shared.email.isEmpty {
+                        HStack {
+                            Text("Email")
+                            Spacer()
+                            Text(AuthSession.shared.email)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     Button("Sign Out", role: .destructive) {
                         AuthSession.shared.signOut()
