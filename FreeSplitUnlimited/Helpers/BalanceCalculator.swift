@@ -13,7 +13,9 @@ struct PersonBalance: Identifiable {
 }
 
 struct Settlement: Identifiable {
-    var id: String { "\(from.id.uuidString)-\(to.id.uuidString)-\(amount)" }
+    var id: String {
+        "\(from.id.uuidString)-\(to.id.uuidString)-\(NSDecimalNumber(decimal: amount).stringValue)"
+    }
     let from: Person
     let to: Person
     let amount: Decimal
@@ -83,18 +85,16 @@ enum BalanceCalculator {
 
         var net: [String: Decimal] = [:]
         var displayName: [String: String] = [:]
-        var occasionIDs: [String: [UUID]] = [:]
-        var occasionNames: [String: [String]] = [:]
+        var groupNet: [String: [UUID: Decimal]] = [:]
+        var groupTitle: [UUID: String] = [:]
 
         for occasion in occasions {
+            groupTitle[occasion.id] = occasion.name
             for member in occasion.uniqueMembers where !isMe(member.name) {
                 let key = member.name.lowercased()
                 displayName[key] = member.name
                 net[key, default: 0] += 0
-                if occasionIDs[key]?.contains(occasion.id) != true {
-                    occasionIDs[key, default: []].append(occasion.id)
-                    occasionNames[key, default: []].append(occasion.name)
-                }
+                groupNet[key, default: [:]][occasion.id, default: 0] += 0
             }
 
             for settlement in settlements(for: occasion) {
@@ -102,21 +102,30 @@ enum BalanceCalculator {
                     let key = settlement.to.name.lowercased()
                     displayName[key] = settlement.to.name
                     net[key, default: 0] -= settlement.amount
+                    groupNet[key, default: [:]][occasion.id, default: 0] -= settlement.amount
                 } else if isMe(settlement.to.name), !isMe(settlement.from.name) {
                     let key = settlement.from.name.lowercased()
                     displayName[key] = settlement.from.name
                     net[key, default: 0] += settlement.amount
+                    groupNet[key, default: [:]][occasion.id, default: 0] += settlement.amount
                 }
             }
         }
 
         return displayName.keys.map { key in
-            FriendSummary(
+            let balances = (groupNet[key] ?? [:]).map { id, amount in
+                FriendGroupBalance(
+                    occasionID: id,
+                    occasionName: groupTitle[id] ?? "Group",
+                    net: amount
+                )
+            }
+            .sorted { $0.occasionName.localizedCaseInsensitiveCompare($1.occasionName) == .orderedAscending }
+            return FriendSummary(
                 id: key,
                 name: displayName[key] ?? key,
                 net: net[key] ?? 0,
-                occasionIDs: occasionIDs[key] ?? [],
-                occasionNames: occasionNames[key] ?? []
+                groupBalances: balances
             )
         }
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -161,13 +170,23 @@ enum BalanceCalculator {
     }
 }
 
+struct FriendGroupBalance: Identifiable, Hashable {
+    var id: UUID { occasionID }
+    let occasionID: UUID
+    let occasionName: String
+    /// Positive = they owe you in this group; negative = you owe them.
+    let net: Decimal
+}
+
 struct FriendSummary: Identifiable {
     let id: String
     let name: String
     /// Positive = they owe you; negative = you owe them.
     let net: Decimal
-    let occasionIDs: [UUID]
-    let occasionNames: [String]
+    let groupBalances: [FriendGroupBalance]
+
+    var occasionIDs: [UUID] { groupBalances.map(\.occasionID) }
+    var occasionNames: [String] { groupBalances.map(\.occasionName) }
 }
 
 struct ActivityEvent: Identifiable {

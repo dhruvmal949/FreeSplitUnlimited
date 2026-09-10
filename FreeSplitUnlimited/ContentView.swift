@@ -96,6 +96,7 @@ private struct GroupsView: View {
     @Query(sort: \Occasion.createdAt, order: .reverse)
     private var allOccasions: [Occasion]
     @State private var showingAddOccasion = false
+    @State private var showingJoinCode = false
     @State private var showingImporter = false
     @State private var statusMessage: StatusMessage?
     @State private var openedGroupID: OpenedGroup?
@@ -178,6 +179,13 @@ private struct GroupsView: View {
         .navigationTitle("Home")
         .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showingJoinCode = true
+                } label: {
+                    Label("Join with Code", systemImage: "person.badge.plus")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showingImporter = true
@@ -209,6 +217,11 @@ private struct GroupsView: View {
             } else {
                 NoneState(image: "person.3", message: "This group isn’t available.")
                     .homeBackButton()
+            }
+        }
+        .sheet(isPresented: $showingJoinCode) {
+            JoinGroupView { id in
+                openedGroupID = OpenedGroup(id: id)
             }
         }
         .sheet(isPresented: $showingAddOccasion, onDismiss: {
@@ -316,6 +329,17 @@ private struct GroupsView: View {
             .disabled(showingAddOccasion)
 
             if groupOccasions.isEmpty {
+                Button {
+                    showingJoinCode = true
+                } label: {
+                    Text("Join with Code")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.bordered)
+                .tint(AppTheme.teal)
+
                 Button {
                     showingImporter = true
                 } label: {

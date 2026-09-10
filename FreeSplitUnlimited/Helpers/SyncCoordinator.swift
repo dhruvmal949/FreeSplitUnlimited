@@ -21,12 +21,13 @@ final class SyncCoordinator: ObservableObject {
 
     private var context: ModelContext?
     private var pollTask: Task<Void, Never>?
+    private var idleStartTask: Task<Void, Never>?
     private var didStart = false
 
     private init() {}
 
     /// Stores the SwiftData context without touching Multipeer radios.
-    /// Starting `MCPeerID` / `MCSession` during launch or a document-open can `brk`.
+    /// Starting `MCPeerID` / `MCSession` during launch can SIGKILL the process.
     func attach(context: ModelContext) {
         self.context = context
     }
@@ -37,7 +38,27 @@ final class SyncCoordinator: ObservableObject {
     }
 
     /// Turns on nearby discovery. Safe to call more than once.
+    /// Use this for user actions (Join with Code, Sync now).
     func startNearby() {
+        idleStartTask?.cancel()
+        idleStartTask = nil
+        startNearbyNow()
+    }
+
+    /// Wait until launch is finished before touching Multipeer. Starting
+    /// Bonjour in the first SwiftUI frame gets the app SIGKILL'd (`lldb_image_notifier`).
+    func startNearbyWhenIdle() {
+        guard !didStart else { return }
+        guard idleStartTask == nil else { return }
+        idleStartTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            idleStartTask = nil
+            startNearbyNow()
+        }
+    }
+
+    private func startNearbyNow() {
         guard let context else { return }
         didStart = true
         MeshSyncService.shared.start(context: context)
@@ -75,6 +96,8 @@ final class SyncCoordinator: ObservableObject {
     }
 
     func stopNearby() {
+        idleStartTask?.cancel()
+        idleStartTask = nil
         didStart = false
         MeshSyncService.shared.stop()
     }
