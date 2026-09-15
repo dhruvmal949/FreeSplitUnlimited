@@ -23,9 +23,6 @@ struct CreateGroupView: View {
     @State private var coverImageData: Data?
     @State private var showingFriendPicker = false
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
-    @State private var discardOnDismiss = false
-    @State private var skipDismissSave = false
-    @State private var savedGroupID: UUID?
 
     init(onCreated: @escaping (UUID) -> Void = { _ in }) {
         self.onCreated = onCreated
@@ -49,9 +46,9 @@ struct CreateGroupView: View {
                     peopleSection
 
                     Button {
-                        persistGroup(dismissAfter: true)
+                        createGroup()
                     } label: {
-                        Text("Done")
+                        Text("Create Group")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
@@ -71,21 +68,7 @@ struct CreateGroupView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        discardOnDismiss = true
-                        if let savedGroupID,
-                           let existing = (try? modelContext.fetch(FetchDescriptor<Occasion>()))?.first(where: { $0.id == savedGroupID && !$0.isDeleted }) {
-                            existing.isDeleted = true
-                            existing.touch()
-                            modelContext.persist()
-                        }
-                        dismiss()
-                    }
-                }
-            }
-            .onDisappear {
-                if !discardOnDismiss && !skipDismissSave && !showingFriendPicker {
-                    persistGroup(dismissAfter: false)
+                    Button("Cancel") { dismiss() }
                 }
             }
             .sheet(isPresented: $showingFriendPicker) {
@@ -281,77 +264,32 @@ struct CreateGroupView: View {
         return (resized, resized.jpegData(compressionQuality: 0.72))
     }
 
-    private func persistGroup(dismissAfter: Bool) {
-        guard canCreate else {
-            if dismissAfter {
-                skipDismissSave = true
-                dismiss()
-            }
-            return
-        }
+    private func createGroup() {
+        guard canCreate else { return }
 
-        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        let groupType = (kind ?? .other).rawValue
-        let occasions = (try? modelContext.fetch(FetchDescriptor<Occasion>())) ?? []
+        let occasion = Occasion(
+            name: trimmedName,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines),
+            groupType: (kind ?? .other).rawValue
+        )
 
-        let occasion: Occasion
-        if let savedGroupID,
-           let existing = occasions.first(where: { $0.id == savedGroupID && !$0.isDeleted }) {
-            existing.name = trimmedName
-            existing.note = trimmedNote
-            existing.groupType = groupType
-            occasion = existing
-        } else {
-            let created = Occasion(
-                name: trimmedName,
-                note: trimmedNote,
-                groupType: groupType
+        var people = friends.filter(\.isComplete).map {
+            Person(
+                name: $0.trimmedName,
+                email: $0.email.trimmingCharacters(in: .whitespacesAndNewlines),
+                phone: $0.phone.trimmingCharacters(in: .whitespacesAndNewlines)
             )
-            JoinCode.assignIfNeeded(to: created, in: modelContext)
-            modelContext.insert(created)
-            occasion = created
+        }
+        if !people.contains(where: { $0.name.localizedCaseInsensitiveCompare("Me") == .orderedSame }) {
+            people.insert(Person(name: "Me"), at: 0)
         }
 
-        applyPeople(to: occasion)
-
+        occasion.members = people
+        modelContext.insert(occasion)
         GroupCoverStore.save(coverImageData, for: occasion.id)
-        occasion.touch()
         modelContext.persist()
-        savedGroupID = occasion.id
-
-        guard dismissAfter else { return }
-        skipDismissSave = true
+        let id = occasion.id
         dismiss()
-        onCreated(occasion.id)
-    }
-
-    private func applyPeople(to occasion: Occasion) {
-        var drafts = friends.filter(\.isComplete)
-        if !drafts.contains(where: {
-            $0.trimmedName.localizedCaseInsensitiveCompare("Me") == .orderedSame
-        }) {
-            drafts.insert(FriendDraft(name: "Me"), at: 0)
-        }
-
-        for draft in drafts {
-            if let existing = occasion.uniqueMembers.first(where: {
-                $0.name.localizedCaseInsensitiveCompare(draft.trimmedName) == .orderedSame
-            }) {
-                if existing.email.isEmpty {
-                    existing.email = draft.email.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-                if existing.phone.isEmpty {
-                    existing.phone = draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            } else {
-                let person = Person(
-                    name: draft.trimmedName,
-                    email: draft.email.trimmingCharacters(in: .whitespacesAndNewlines),
-                    phone: draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
-                )
-                person.occasion = occasion
-                modelContext.insert(person)
-            }
-        }
+        onCreated(id)
     }
 }

@@ -5,7 +5,6 @@
 
 import SwiftUI
 import SwiftData
-import UIKit
 
 struct GroupSettingsView: View {
     @Bindable var occasion: Occasion
@@ -18,14 +17,6 @@ struct GroupSettingsView: View {
     @State private var note = ""
     @State private var kind: GroupKind = .other
     @State private var confirmDelete = false
-    @State private var autoSaveTask: Task<Void, Never>?
-    @State private var isHydrating = true
-    @State private var skipSaveOnDismiss = false
-
-    private var displayedCode: String {
-        let code = JoinCode.normalize(occasion.joinCode)
-        return code.isEmpty ? "—" : code
-    }
 
     var body: some View {
         NavigationStack {
@@ -41,31 +32,6 @@ struct GroupSettingsView: View {
                             }
                         }
                     }
-                }
-
-                Section {
-                    HStack {
-                        Text("Join code")
-                        Spacer()
-                        Text(displayedCode)
-                            .font(.body.weight(.semibold).monospaced())
-                            .foregroundStyle(AppTheme.deepTeal)
-                            .textSelection(.enabled)
-                    }
-                    Button {
-                        UIPasteboard.general.string = displayedCode
-                    } label: {
-                        Label("Copy code", systemImage: "doc.on.doc")
-                    }
-                    SwiftUI.ShareLink(
-                        item: "Join my Free Split group “\(occasion.name)” with code \(displayedCode). Open Free Split → Join with Code, then stand near me with the app open."
-                    ) {
-                        Label("Share code", systemImage: "square.and.arrow.up")
-                    }
-                } header: {
-                    Text("Invite without AirDrop")
-                } footer: {
-                    Text("A friend types this code in Free Split. Keep both phones nearby with the app open so the group can sync.")
                 }
 
                 Section("People") {
@@ -89,36 +55,20 @@ struct GroupSettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { saveAndDismiss() }
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .onAppear {
-                isHydrating = true
                 name = occasion.name
                 note = occasion.note
                 kind = occasion.kind
-                let before = occasion.joinCode
-                JoinCode.assignIfNeeded(to: occasion, in: modelContext)
-                if occasion.joinCode != before {
-                    modelContext.persist()
-                }
-                DispatchQueue.main.async {
-                    isHydrating = false
-                }
-            }
-            .onChange(of: name) { _, _ in scheduleAutoSave() }
-            .onChange(of: note) { _, _ in scheduleAutoSave() }
-            .onChange(of: kind) { _, _ in scheduleAutoSave() }
-            .onDisappear {
-                autoSaveTask?.cancel()
-                if !skipSaveOnDismiss && !occasion.isDeleted {
-                    saveIfNeeded()
-                }
             }
             .confirmationDialog("Delete this group?", isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("Delete Group", role: .destructive) {
-                    skipSaveOnDismiss = true
-                    autoSaveTask?.cancel()
                     occasion.isDeleted = true
                     occasion.touch()
                     modelContext.persist()
@@ -133,37 +83,14 @@ struct GroupSettingsView: View {
         .tint(AppTheme.teal)
     }
 
-    private func scheduleAutoSave() {
-        autoSaveTask?.cancel()
-        guard !isHydrating else { return }
-        autoSaveTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            saveIfNeeded()
-        }
-    }
-
-    private func saveAndDismiss() {
-        autoSaveTask?.cancel()
-        saveIfNeeded()
-        dismiss()
-    }
-
-    private func saveIfNeeded() {
-        guard !occasion.isDeleted else { return }
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else { return }
-        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextKind = occasion.isOneToOne ? occasion.groupType : kind.rawValue
-        let kindChanged = !occasion.isOneToOne && occasion.groupType != kind.rawValue
-        guard trimmedName != occasion.name || trimmedNote != occasion.note || kindChanged else { return }
-        occasion.name = trimmedName
-        occasion.note = trimmedNote
+    private func save() {
+        occasion.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        occasion.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
         if !occasion.isOneToOne {
-            occasion.groupType = nextKind
+            occasion.groupType = kind.rawValue
         }
         occasion.touch()
         modelContext.persist()
+        dismiss()
     }
-
 }

@@ -19,9 +19,6 @@ final class Occasion {
     var isDeleted: Bool = false
     /// Stored as a string so older SwiftData stores can load without trapping.
     var groupType: String = GroupKind.other.rawValue
-    var coverImageData: Data? = nil
-    /// Short code like TRIP-4K so a friend can join without AirDrop.
-    var joinCode: String = ""
     @Relationship(deleteRule: .cascade, inverse: \Person.occasion)
     var members: [Person] = []
     @Relationship(deleteRule: .cascade, inverse: \Expense.occasion)
@@ -33,10 +30,7 @@ final class Occasion {
         createdAt: Date = .now,
         updatedAt: Date? = nil,
         id: UUID = UUID(),
-
-        groupType: String = GroupKind.other.rawValue,
-        coverImageData: Data? = nil,
-        joinCode: String = ""
+        groupType: String = GroupKind.other.rawValue
     ) {
         self.id = id
         self.name = name
@@ -45,8 +39,6 @@ final class Occasion {
         self.updatedAt = updatedAt ?? createdAt
         self.isDeleted = false
         self.groupType = groupType
-        self.coverImageData = coverImageData
-        self.joinCode = joinCode
         self.members = []
         self.expenses = []
     }

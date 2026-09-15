@@ -42,9 +42,6 @@ struct AddOccasionView: View {
     @State private var friends: [FriendDraft]
     @State private var showingFriendPicker = false
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
-    @State private var discardOnDismiss = false
-    @State private var skipDismissSave = false
-    @State private var savedOccasionID: UUID?
 
     init(initialFriends: [FriendDraft] = []) {
         let me = FriendDraft(contact: ContactDirectory.me())
@@ -108,7 +105,7 @@ struct AddOccasionView: View {
 
                 Section {
                     Button {
-                        save(dismissAfter: true)
+                        save()
                     } label: {
                         Text("Create Split")
                             .font(.headline)
@@ -128,21 +125,7 @@ struct AddOccasionView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        discardOnDismiss = true
-                        if let savedOccasionID,
-                           let existing = (try? modelContext.fetch(FetchDescriptor<Occasion>()))?.first(where: { $0.id == savedOccasionID && !$0.isDeleted }) {
-                            existing.isDeleted = true
-                            existing.touch()
-                            modelContext.persist()
-                        }
-                        dismiss()
-                    }
-                }
-            }
-            .onDisappear {
-                if !discardOnDismiss && !skipDismissSave && !showingFriendPicker {
-                    save(dismissAfter: false)
+                    Button("Cancel") { dismiss() }
                 }
             }
             .sheet(isPresented: $showingFriendPicker) {
@@ -196,14 +179,11 @@ struct AddOccasionView: View {
         friends = next
     }
 
-    private func save(dismissAfter: Bool = true) {
-        guard canSave else {
-            if dismissAfter { dismiss() }
-            return
-        }
-
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func save() {
+        let occasion = Occasion(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         let people = friends
             .filter(\.isComplete)
             .map {
@@ -214,26 +194,10 @@ struct AddOccasionView: View {
                 )
             }
 
-        if let savedOccasionID,
-           let existing = (try? modelContext.fetch(FetchDescriptor<Occasion>()))?.first(where: { $0.id == savedOccasionID && !$0.isDeleted }) {
-            existing.name = trimmedName
-            existing.note = trimmedNote
-            existing.touch()
-            modelContext.persist()
-        } else {
-            let occasion = Occasion(
-                name: trimmedName,
-                note: trimmedNote
-            )
-            occasion.members = people
-            modelContext.insert(occasion)
-            modelContext.persist()
-            savedOccasionID = occasion.id
-        }
-        if dismissAfter {
-            skipDismissSave = true
-            dismiss()
-        }
+        occasion.members = people
+        modelContext.insert(occasion)
+        modelContext.persist()
+        dismiss()
     }
 }
 

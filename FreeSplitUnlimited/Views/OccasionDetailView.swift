@@ -20,11 +20,7 @@ struct OccasionDetailView: View {
     @State private var selectedTab = 0
     @State private var sharePayload: ActivitySharePayload?
     @State private var shareAlert: String?
-    @State private var remindPayload: FriendRemindPayload?
-    @State private var payRequest: PayFriendRequest?
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
-    @State private var wasUnsettled = false
-    @State private var confettiStartedAt: Date?
 
     private var sortedExpenses: [Expense] {
         var seen = Set<UUID>()
@@ -43,33 +39,6 @@ struct OccasionDetailView: View {
 
     private var isAlone: Bool {
         occasion.uniqueMembers.count < 2
-    }
-
-    private var myNames: [String] {
-        AuthSession.shared.selfNames
-    }
-
-    private func isMe(_ name: String) -> Bool {
-        myNames.contains { $0.localizedCaseInsensitiveCompare(name) == .orderedSame }
-    }
-
-    private var canCelebrate: Bool {
-        occasion.uniqueMembers.count >= 2 && !occasion.expenses.isEmpty
-    }
-
-    private var settleWatch: String {
-        "\(settlements.isEmpty)-\(occasion.expenses.count)-\(occasion.updatedAt.timeIntervalSinceReferenceDate)"
-    }
-
-    private func celebrateIfNewlySettled() {
-        let nowSettled = canCelebrate && settlements.isEmpty
-        if wasUnsettled && nowSettled {
-            DispatchQueue.main.async {
-                confettiStartedAt = .now
-                selectedTab = 1
-            }
-        }
-        wasUnsettled = canCelebrate && !settlements.isEmpty
     }
 
     var body: some View {
@@ -96,23 +65,11 @@ struct OccasionDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(.systemBackground))
-        .overlay {
-            if confettiStartedAt != nil {
-                ConfettiCannon()
-                    .id(confettiStartedAt)
-            }
-        }
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
         .toolbarBackground(.hidden, for: .navigationBar)
         .sheet(item: $sharePayload) { payload in
             ActivityShareSheet(payload: payload)
-        }
-        .sheet(item: $remindPayload) { payload in
-            FriendRemindSheet(payload: payload)
-        }
-        .sheet(item: $payRequest) { request in
-            PayFriendSheet(request: request, occasions: [occasion])
         }
         .alert("Couldn't Share", isPresented: Binding(
             get: { shareAlert != nil },
@@ -141,20 +98,6 @@ struct OccasionDetailView: View {
             .padding(.bottom, 8)
         }
         .avoidsMainTabBar()
-        .onAppear {
-            let before = occasion.joinCode
-            JoinCode.assignIfNeeded(to: occasion, in: modelContext)
-            let assigned = occasion.joinCode != before
-            wasUnsettled = canCelebrate && !settlements.isEmpty
-            if assigned {
-                DispatchQueue.main.async {
-                    modelContext.persist()
-                }
-            }
-        }
-        .onChange(of: settleWatch) { _, _ in
-            celebrateIfNewlySettled()
-        }
         .sheet(isPresented: $showingAddExpense) {
             AddExpenseView(occasion: occasion)
         }
@@ -304,22 +247,6 @@ struct OccasionDetailView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(AppTheme.teal)
 
-                if !JoinCode.normalize(occasion.joinCode).isEmpty {
-                    VStack(spacing: 6) {
-                        Text("Join code")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(occasion.joinCode)
-                            .font(.title2.weight(.bold).monospaced())
-                            .foregroundStyle(AppTheme.deepTeal)
-                        Text("A friend types this in Join with Code. Keep both phones nearby.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding(.top, 4)
-                }
-
                 Button {
                     shareSplit()
                 } label: {
@@ -407,46 +334,16 @@ struct OccasionDetailView: View {
 
             Section {
                 if settlements.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Everyone is settled up.")
-                            .font(.headline)
-                            .foregroundStyle(AppTheme.deepTeal)
-                        Text("No one owes anyone in this group.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .listRowBackground(Color.white.opacity(0.78))
+                    Text("Everyone is settled up.")
+                        .foregroundStyle(.secondary)
+                        .listRowBackground(Color.white.opacity(0.78))
                 } else {
                     ForEach(settlements) { settlement in
-                        HStack(alignment: .center) {
+                        HStack(alignment: .firstTextBaseline) {
                             Text("\(settlement.from.name) → \(settlement.to.name)")
                             Spacer()
-                            VStack(alignment: .trailing, spacing: 6) {
-                                Text(CurrencyFormat.string(from: settlement.amount))
-                                    .fontWeight(.semibold)
-                                if isMe(settlement.to.name), !isMe(settlement.from.name) {
-                                    Button("Remind") {
-                                        remindPayload = FriendReminder.payload(
-                                            name: settlement.from.name,
-                                            amount: settlement.amount,
-                                            occasions: [occasion],
-                                            myNames: myNames
-                                        )
-                                    }
-                                    .font(.caption.weight(.semibold))
-                                } else if isMe(settlement.from.name), !isMe(settlement.to.name) {
-                                    Button("Pay") {
-                                        payRequest = PaymentTransfer.request(
-                                            payeeName: settlement.to.name,
-                                            amount: settlement.amount,
-                                            occasions: [occasion],
-                                            note: "Free Split · \(occasion.name)",
-                                            legs: [PaymentLeg(occasionID: occasion.id, amount: settlement.amount)]
-                                        )
-                                    }
-                                    .font(.caption.weight(.semibold))
-                                }
-                            }
+                            Text(CurrencyFormat.string(from: settlement.amount))
+                                .fontWeight(.semibold)
                         }
                         .listRowBackground(Color.white.opacity(0.78))
                     }
@@ -454,7 +351,7 @@ struct OccasionDetailView: View {
             } header: {
                 Text("Settle up")
             } footer: {
-                Text("Suggested payments so everyone is even. Pay opens Venmo, Cash App, PayPal, or Messages, then tap I paid.")
+                Text("Suggested payments so everyone is even.")
             }
         }
         .freeSplitListStyle()
@@ -552,14 +449,6 @@ struct OccasionDetailView: View {
         }
         occasion.touch()
         modelContext.persist()
-    }
-
-    private var joinInviteText: String {
-        let code = JoinCode.normalize(occasion.joinCode)
-        if code.isEmpty {
-            return "Join my Free Split group “\(occasion.name)”. Open Free Split on your phone and stand near me."
-        }
-        return "Join my Free Split group “\(occasion.name)” with code \(code). Open Free Split → Join with Code, then stand near me with the app open."
     }
 
     private func shareSplit() {
