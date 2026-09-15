@@ -412,6 +412,7 @@
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.";
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Free Split uses your contacts so you can add friends to a split. You can allow all contacts or only the ones you choose.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Free Split uses Face ID to open your existing account on this iPhone.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Free Split uses your local network to sync splits directly with nearby friends' phones — no internet or AirDrop needed.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Free Split uses your photos so you can add a picture to a group.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -454,6 +455,7 @@
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.";
 				INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription = "Free Split uses Bluetooth to discover and sync splits with nearby friends' phones — no internet or AirDrop needed.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Free Split uses your contacts so you can add friends to a split. You can allow all contacts or only the ones you choose.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Free Split uses Face ID to open your existing account on this iPhone.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Free Split uses your local network to sync splits directly with nearby friends' phones — no internet or AirDrop needed.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Free Split uses your photos so you can add a picture to a group.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 enum AppTheme {
     static let teal = Color(red: 42 / 255, green: 157 / 255, blue: 143 / 255)
@@ -263,6 +264,18 @@ extension View {
             Color.clear
                 .frame(height: AppTheme.mainTabBarHeight)
                 .accessibilityHidden(true)
+        }
+    }
+
+    func keyboardDoneButton() -> some View {
+        self.toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+                .accessibilityIdentifier("keyboardDone")
+            }
         }
     }
 }

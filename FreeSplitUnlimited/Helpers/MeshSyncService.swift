@@ -129,6 +129,11 @@ final class MeshSyncService: NSObject, ObservableObject {
 
     private var context: ModelContext?
     private var restartTask: Task<Void, Never>?
+    private var bounceTask: Task<Void, Never>?
+    private var bounceGeneration = 0
+    private var radiosSuspended = false
+    private var isAdvertising = false
+    private var isBrowsing = false
     private var pendingInvites = Set<String>()
     private var connectingKeys = Set<String>()
     private var joinWaiters: [String: [CheckedContinuation<BackupOccasion?, Never>]] = [:]
@@ -141,16 +146,16 @@ final class MeshSyncService: NSObject, ObservableObject {
     }
 
     private func prepareRadiosIfNeeded() {
-        guard session == nil else { return }
-        let peerID = myPeerID ?? MCPeerID(displayName: Self.persistedDisplayName())
-        myPeerID = peerID
-        let session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .optional)
-        session.delegate = self
-        self.session = session
-        rebuildAdvertiser(for: peerID)
-        let browser = MCNearbyServiceBrowser(peer: peerID, serviceType: Self.serviceType)
-        browser.delegate = self
-        self.browser = browser
+        if session == nil {
+            let peerID = myPeerID ?? MCPeerID(displayName: Self.persistedDisplayName())
+            myPeerID = peerID
+            let session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .optional)
+            session.delegate = self
+            self.session = session
+        }
+        if advertiser == nil || browser == nil {
+            recreateDiscoveryRadios()
+        }
     }
 
     private func currentDiscoveryInfo() -> [String: String] {
@@ -163,7 +168,6 @@ final class MeshSyncService: NSObject, ObservableObject {
     }
 
     private func rebuildAdvertiser(for peerID: MCPeerID) {
-        advertiser?.stopAdvertisingPeer()
         advertisedIdentity = AuthSession.shared.pairingName
         let advertiser = MCNearbyServiceAdvertiser(
             peer: peerID,
@@ -195,11 +199,14 @@ final class MeshSyncService: NSObject, ObservableObject {
     func stop() {
         restartTask?.cancel()
         restartTask = nil
+        bounceTask?.cancel()
+        bounceTask = nil
+        bounceGeneration += 1
         isRunning = false
         isConnecting = false
         lastError = nil
-        advertiser?.stopAdvertisingPeer()
-        browser?.stopBrowsingForPeers()
+        radiosSuspended = false
+        tearDownDiscoveryRadios()
         session?.disconnect()
         pendingInvites.removeAll()
         connectingKeys.removeAll()
@@ -258,38 +265,79 @@ final class MeshSyncService: NSObject, ObservableObject {
     // MARK: Discovery
 
     private func startDiscovery() {
+        guard !radiosSuspended else { return }
         prepareRadiosIfNeeded()
         if let peerID = myPeerID, advertisedIdentity != AuthSession.shared.pairingName {
-            rebuildAdvertiser(for: peerID)
+            scheduleRadioRebuild()
+            return
         }
-        advertiser?.startAdvertisingPeer()
-        browser?.startBrowsingForPeers()
+        if !isAdvertising {
+            advertiser?.startAdvertisingPeer()
+            isAdvertising = true
+        }
+        if !isBrowsing {
+            browser?.startBrowsingForPeers()
+            isBrowsing = true
+        }
     }
 
-    /// Stop/start radios only when nothing is mid-handshake. Bouncing while
-    /// `.connecting` cancels the invite and the phones never pair.
+    /// Stop then start Bonjour on **new** advertiser/browser objects after a pause.
+    /// Stop+start on the same objects races CFNetwork (`_BrowserCancel` /
+    /// `_CFAssertMismatchedTypeID`) and crashes on device.
     private func bounceDiscovery() {
         guard isRunning else { return }
-        advertiser?.stopAdvertisingPeer()
-        browser?.stopBrowsingForPeers()
-        startDiscovery()
+        scheduleRadioRebuild()
+    }
+
+    private func scheduleRadioRebuild() {
+        bounceGeneration += 1
+        let generation = bounceGeneration
+        bounceTask?.cancel()
+        radiosSuspended = true
+        tearDownDiscoveryRadios()
+        bounceTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled, self.isRunning, generation == self.bounceGeneration else { return }
+            self.radiosSuspended = false
+            self.recreateDiscoveryRadios()
+            self.startDiscovery()
+        }
+    }
+
+    private func tearDownDiscoveryRadios() {
+        advertiser?.delegate = nil
+        browser?.delegate = nil
+        if isAdvertising {
+            advertiser?.stopAdvertisingPeer()
+            isAdvertising = false
+        }
+        if isBrowsing {
+            browser?.stopBrowsingForPeers()
+            isBrowsing = false
+        }
+        advertiser = nil
+        browser = nil
+    }
+
+    private func recreateDiscoveryRadios() {
+        guard let peerID = myPeerID else { return }
+        rebuildAdvertiser(for: peerID)
+        let browser = MCNearbyServiceBrowser(peer: peerID, serviceType: Self.serviceType)
+        browser.delegate = self
+        self.browser = browser
     }
 
     private func ensureRestartLoop() {
         guard restartTask == nil else { return }
         restartTask = Task { @MainActor in
-            var ticks = 0
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(8))
+                try? await Task.sleep(for: .seconds(20))
                 guard !Task.isCancelled, self.isRunning else { return }
-                ticks += 1
                 let idle = (self.session?.connectedPeers.isEmpty ?? true)
                     && self.connectingKeys.isEmpty
-                guard idle else { continue }
-                if ticks % 6 == 0 {
-                    self.pendingInvites.removeAll()
-                    self.bounceDiscovery()
-                } else {
+                guard idle, !self.radiosSuspended else { continue }
+                if self.lastError != nil || !self.isAdvertising || !self.isBrowsing {
+                    self.lastError = nil
                     self.startDiscovery()
                 }
             }
@@ -564,6 +612,7 @@ extension MeshSyncService: MCNearbyServiceAdvertiserDelegate {
     nonisolated func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
         print("Mesh advertising failed: \(error.localizedDescription)")
         Task { @MainActor in
+            self.isAdvertising = false
             self.lastError = "Couldn't start nearby sync. Allow Local Network for Free Split in iPhone Settings."
             try? await Task.sleep(for: .seconds(3))
             guard self.isRunning else { return }
@@ -592,6 +641,7 @@ extension MeshSyncService: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
         print("Mesh browsing failed: \(error.localizedDescription)")
         Task { @MainActor in
+            self.isBrowsing = false
             self.lastError = "Couldn't find nearby phones. Allow Local Network for Free Split in iPhone Settings."
             try? await Task.sleep(for: .seconds(3))
             guard self.isRunning else { return }

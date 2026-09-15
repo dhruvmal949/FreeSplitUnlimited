@@ -7,21 +7,48 @@ import SwiftUI
 
 struct LoginView: View {
     @ObservedObject private var session = AuthSession.shared
-    @State private var username = ""
-    @State private var password = ""
+    @State private var contact = ContactEntryState()
+    @State private var password = AuthSession.shared.rememberedPassword
     @State private var errorMessage: String?
     @State private var showingCreateAccount = false
     @State private var showingForgotPassword = false
+    @State private var didAutoPromptFaceID = false
 
     private var canLogIn: Bool {
-        !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !password.isEmpty
+        contact.isValid && !password.isEmpty
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    Spacer(minLength: 12)
+                    HStack(spacing: 12) {
+                        if session.hasUnlockableAccount {
+                            Button {
+                                Task {
+                                    errorMessage = await session.unlockWithFaceID()
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "faceid")
+                                    Text("Face ID")
+                                }
+                            }
+                            .buttonStyle(LoginCornerButtonStyle())
+                            .accessibilityLabel("Face ID")
+                            .accessibilityIdentifier("loginFaceIDButton")
+                        }
+
+                        Spacer(minLength: 8)
+
+                        Button("Create an account") {
+                            session.lastError = nil
+                            showingCreateAccount = true
+                        }
+                        .buttonStyle(LoginCornerButtonStyle())
+                        .accessibilityIdentifier("loginCreateAccount")
+                    }
+                    .padding(.horizontal, 16)
 
                     VStack(spacing: 6) {
                         BrandLogoMark(size: 88)
@@ -29,78 +56,92 @@ struct LoginView: View {
                         Text("Free Split")
                             .font(.largeTitle.weight(.bold))
                             .foregroundStyle(AppTheme.deepTeal)
-                        Text("Sign in to your account")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
                     }
 
-                    VStack(spacing: 12) {
-                        TextField("Username", text: $username)
-                            .textContentType(.username)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .padding(14)
-                            .background(Color.white.opacity(0.78), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    VStack(alignment: .leading, spacing: 12) {
+                        EmailPhonePicker(
+                            entry: $contact,
+                            fieldIdentifier: "loginEmailField",
+                            pickerIdentifier: "loginContactKind",
+                            hintIdentifier: "loginContactHint",
+                            onKindChange: { errorMessage = nil }
+                        )
 
-                        PasswordField(title: "Password", text: $password, contentType: .password)
+                        PasswordField(title: "Password", text: $password, contentType: .password, fieldIdentifier: "loginPasswordField")
+
+                        HStack(alignment: .center) {
+                            Button {
+                                session.rememberMe.toggle()
+                                if session.rememberMe {
+                                    session.saveRememberedCredentials(login: contact.selectedValue, password: password)
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: session.rememberMe ? "checkmark.square.fill" : "square")
+                                        .font(.body)
+                                        .foregroundStyle(AppTheme.teal)
+                                    Text("Remember me")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.primary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("loginRememberMe")
+                            .accessibilityLabel("Remember me")
+                            .accessibilityAddTraits(session.rememberMe ? [.isSelected] : [])
+
+                            Spacer(minLength: 8)
+
+                            Button("Forget Password") {
+                                session.lastError = nil
+                                showingForgotPassword = true
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .accessibilityIdentifier("loginForgotPassword")
+                        }
 
                         HStack {
-                            Toggle("Remember me", isOn: $session.rememberMe)
-                                .tint(AppTheme.teal)
-                            Spacer(minLength: 8)
+                            Spacer()
+                            Button {
+                                errorMessage = session.logIn(username: contact.selectedValue, password: password)
+                            } label: {
+                                Text("Sign In")
+                                    .font(.subheadline.weight(.semibold))
+                                    .padding(.horizontal, 18)
+                                    .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(AppTheme.teal)
+                            .disabled(!canLogIn)
+                            .accessibilityIdentifier("loginSignInButton")
+                            Spacer()
                         }
-                        .font(.subheadline)
-
-                        Button("Forgot password?") {
-                            session.lastError = nil
-                            showingForgotPassword = true
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity, alignment: .trailing)
 
                         if let errorMessage {
                             Text(errorMessage)
                                 .font(.footnote)
                                 .foregroundStyle(.red)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityIdentifier("loginErrorLabel")
                         }
-
-                        Button {
-                            errorMessage = session.logIn(username: username, password: password)
-                        } label: {
-                            Text("Sign In")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(AppTheme.teal)
-                        .disabled(!canLogIn)
-
-                        Button {
-                            session.lastError = nil
-                            showingCreateAccount = true
-                        } label: {
-                            Text("Create a new account")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(AppTheme.deepTeal)
 
                         Button {
                             session.continueAsGuest()
                         } label: {
                             Text("Continue as Guest")
-                                .font(.headline)
+                                .font(.subheadline.weight(.semibold))
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
+                                .padding(.vertical, 10)
                         }
                         .buttonStyle(.bordered)
                         .tint(AppTheme.teal)
+                        .accessibilityLabel("Guest")
+                        .accessibilityIdentifier("loginGuestButton")
                     }
                     .padding(.horizontal, 24)
+                    .onChange(of: contact.email) { _, _ in saveRememberedIfNeeded() }
+                    .onChange(of: contact.phone) { _, _ in saveRememberedIfNeeded() }
+                    .onChange(of: password) { _, _ in saveRememberedIfNeeded() }
 
                     VStack(spacing: 12) {
                         HStack {
@@ -111,11 +152,7 @@ struct LoginView: View {
                             Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
                         }
 
-                        SocialAuthButtons(
-                            appleTitle: "Apple",
-                            googleTitle: "Google",
-                            facebookTitle: "Facebook"
-                        )
+                        SocialAuthButtons(googleTitle: "Google")
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 8)
@@ -126,16 +163,129 @@ struct LoginView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .freeSplitBackground()
-            .navigationTitle("Sign In")
+            .keyboardDoneButton()
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
-            .sheet(isPresented: $showingCreateAccount) {
+            .toolbar(.hidden, for: .navigationBar)
+            .sheet(isPresented: $showingCreateAccount, onDismiss: {
+                contact.applyRemembered(session.rememberedLogin)
+            }) {
                 CreateAccountView()
             }
-            .sheet(isPresented: $showingForgotPassword) {
+            .sheet(isPresented: $showingForgotPassword, onDismiss: {
+                contact.applyRemembered(session.rememberedLogin)
+                password = ""
+                errorMessage = nil
+            }) {
                 ForgotPasswordView()
+            }
+            .sheet(isPresented: $session.needsGoogleEmailConfirmation) {
+                GoogleEmailConfirmView()
+            }
+            .alert("Use Face ID?", isPresented: $session.needsFaceIDOptIn) {
+                Button("Yes") {
+                    session.answerFaceIDOptIn(true)
+                }
+                Button("No", role: .cancel) {
+                    session.answerFaceIDOptIn(false)
+                }
+            } message: {
+                Text("Use Face ID to open Free Split next time instead of signing in with your email or phone?")
+            }
+            .onAppear {
+                contact.applyRemembered(session.rememberedLogin)
+                promptFaceIDIfEnabled()
             }
         }
         .tint(AppTheme.teal)
+    }
+
+    private func saveRememberedIfNeeded() {
+        guard session.rememberMe else { return }
+        session.saveRememberedCredentials(login: contact.selectedValue, password: password)
+    }
+
+    private func promptFaceIDIfEnabled() {
+        guard !didAutoPromptFaceID, session.shouldAutoPromptFaceID else { return }
+        didAutoPromptFaceID = true
+        Task {
+            errorMessage = await session.unlockWithFaceID()
+        }
+    }
+}
+
+private struct GoogleEmailConfirmView: View {
+    @ObservedObject private var session = AuthSession.shared
+    @State private var email: String
+    @State private var errorMessage: String?
+
+    init() {
+        _email = State(initialValue: AuthSession.shared.lastGoogleEmail ?? "")
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Enter the Google email you just signed in with.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                EmailAddressField(
+                    text: $email,
+                    isFocused: true,
+                    accessibilityIdentifier: "googleEmailField"
+                )
+                .authInputChrome()
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+
+                Button {
+                    errorMessage = session.confirmGoogleEmail(email)
+                } label: {
+                    Text("Continue")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppTheme.teal)
+                .disabled(!isValidEmail(email))
+
+                Spacer()
+            }
+            .padding(24)
+            .freeSplitBackground()
+            .navigationTitle("Google account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        session.needsGoogleEmailConfirmation = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+}
+
+private struct LoginCornerButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(AppTheme.deepTeal)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                Color.white.opacity(configuration.isPressed ? 0.7 : 0.88),
+                in: Capsule()
+            )
+            .overlay {
+                Capsule().stroke(Color.white.opacity(0.95), lineWidth: 0.8)
+            }
+            .shadow(color: AppTheme.deepTeal.opacity(0.12), radius: 8, y: 2)
     }
 }

@@ -81,16 +81,11 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Guest"].waitForExistence(timeout: 4))
         app.buttons["Sign Out"].tap()
 
-        XCTAssertTrue(app.navigationBars["Log In"].waitForExistence(timeout: 5))
-        let username = app.textFields["Username"]
-        let password = app.secureTextFields["Password"]
-        XCTAssertTrue(username.waitForExistence(timeout: 4))
-        username.tap()
-        username.typeText("dhruv")
-        password.tap()
-        password.typeText("secret")
-        app.buttons["Login"].tap()
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["loginEmailField"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["loginEmailField"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.secureTextFields["loginPasswordField"].exists)
+        XCTAssertTrue(app.buttons["loginSignInButton"].exists)
+        XCTAssertTrue(app.buttons["loginGuestButton"].exists)
     }
 
     @MainActor

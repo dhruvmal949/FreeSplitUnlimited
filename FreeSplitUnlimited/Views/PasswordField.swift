@@ -10,6 +10,7 @@ struct PasswordField: View {
     var title: String
     @Binding var text: String
     var contentType: UITextContentType = .password
+    var fieldIdentifier: String? = nil
 
     @State private var isVisible = false
 
@@ -22,9 +23,10 @@ struct PasswordField: View {
                     SecureField(title, text: $text)
                 }
             }
-            .textContentType(contentType)
+            .textContentType(AppLaunchFlags.isUITesting ? .oneTimeCode : contentType)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
+            .accessibilityIdentifier(fieldIdentifier ?? title)
 
             Button {
                 isVisible.toggle()
@@ -37,6 +39,7 @@ struct PasswordField: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(isVisible ? "Hide password" : "Show password")
+            .accessibilityIdentifier("\(fieldIdentifier ?? title)Visibility")
         }
         .padding(14)
         .background(Color.white.opacity(0.78), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
