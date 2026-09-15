@@ -13,6 +13,10 @@ struct LoginView: View {
     @State private var showingCreateAccount = false
     @State private var showingForgotPassword = false
     @State private var didAutoPromptFaceID = false
+    @State private var didPrefillContact = false
+    @State private var rememberedLoginWhenOpeningSheet = ""
+    @State private var prefersManualLogin = false
+    @State private var ignoreLoginEdits = true
 
     private var canLogIn: Bool {
         contact.isValid && !password.isEmpty
@@ -43,6 +47,7 @@ struct LoginView: View {
 
                         Button("Create an account") {
                             session.lastError = nil
+                            rememberedLoginWhenOpeningSheet = session.rememberedLogin
                             showingCreateAccount = true
                         }
                         .buttonStyle(LoginCornerButtonStyle())
@@ -64,7 +69,10 @@ struct LoginView: View {
                             fieldIdentifier: "loginEmailField",
                             pickerIdentifier: "loginContactKind",
                             hintIdentifier: "loginContactHint",
-                            onKindChange: { errorMessage = nil }
+                            onKindChange: {
+                                errorMessage = nil
+                                beginManualLogin()
+                            }
                         )
 
                         PasswordField(title: "Password", text: $password, contentType: .password, fieldIdentifier: "loginPasswordField")
@@ -94,6 +102,7 @@ struct LoginView: View {
 
                             Button("Forget Password") {
                                 session.lastError = nil
+                                rememberedLoginWhenOpeningSheet = session.rememberedLogin
                                 showingForgotPassword = true
                             }
                             .font(.subheadline.weight(.semibold))
@@ -139,9 +148,18 @@ struct LoginView: View {
                         .accessibilityIdentifier("loginGuestButton")
                     }
                     .padding(.horizontal, 24)
-                    .onChange(of: contact.email) { _, _ in saveRememberedIfNeeded() }
-                    .onChange(of: contact.phone) { _, _ in saveRememberedIfNeeded() }
-                    .onChange(of: password) { _, _ in saveRememberedIfNeeded() }
+                    .onChange(of: contact.email) { _, _ in
+                        beginManualLogin()
+                        saveRememberedIfNeeded()
+                    }
+                    .onChange(of: contact.phone) { _, _ in
+                        beginManualLogin()
+                        saveRememberedIfNeeded()
+                    }
+                    .onChange(of: password) { _, _ in
+                        beginManualLogin()
+                        saveRememberedIfNeeded()
+                    }
 
                     VStack(spacing: 12) {
                         HStack {
@@ -167,13 +185,14 @@ struct LoginView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showingCreateAccount, onDismiss: {
-                contact.applyRemembered(session.rememberedLogin)
+                applyRememberedIfChanged()
             }) {
                 CreateAccountView()
             }
             .sheet(isPresented: $showingForgotPassword, onDismiss: {
-                contact.applyRemembered(session.rememberedLogin)
-                password = ""
+                if applyRememberedIfChanged() {
+                    password = ""
+                }
                 errorMessage = nil
             }) {
                 ForgotPasswordView()
@@ -192,11 +211,31 @@ struct LoginView: View {
                 Text("Use Face ID to open Free Split next time instead of signing in with your email or phone?")
             }
             .onAppear {
-                contact.applyRemembered(session.rememberedLogin)
-                promptFaceIDIfEnabled()
+                if !didPrefillContact {
+                    contact.applyRemembered(session.rememberedLogin)
+                    didPrefillContact = true
+                }
+                scheduleFaceIDPrompt()
+                DispatchQueue.main.async {
+                    ignoreLoginEdits = false
+                }
             }
         }
         .tint(AppTheme.teal)
+    }
+
+    @discardableResult
+    private func applyRememberedIfChanged() -> Bool {
+        let login = session.rememberedLogin
+        guard login != rememberedLoginWhenOpeningSheet else { return false }
+        contact.applyRemembered(login)
+        return true
+    }
+
+    private func beginManualLogin() {
+        guard !ignoreLoginEdits else { return }
+        prefersManualLogin = true
+        session.cancelPendingFaceIDUnlock()
     }
 
     private func saveRememberedIfNeeded() {
@@ -204,10 +243,12 @@ struct LoginView: View {
         session.saveRememberedCredentials(login: contact.selectedValue, password: password)
     }
 
-    private func promptFaceIDIfEnabled() {
-        guard !didAutoPromptFaceID, session.shouldAutoPromptFaceID else { return }
+    private func scheduleFaceIDPrompt() {
+        guard !didAutoPromptFaceID, !prefersManualLogin, session.shouldAutoPromptFaceID else { return }
         didAutoPromptFaceID = true
         Task {
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !prefersManualLogin, !session.isAuthenticated else { return }
             errorMessage = await session.unlockWithFaceID()
         }
     }

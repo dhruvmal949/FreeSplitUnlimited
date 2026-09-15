@@ -136,7 +136,6 @@ final class MeshSyncService: NSObject, ObservableObject {
     private var isBrowsing = false
     private var pendingInvites = Set<String>()
     private var connectingKeys = Set<String>()
-    private var joinWaiters: [String: [CheckedContinuation<BackupOccasion?, Never>]] = [:]
     private var advertisedUserNames: [String: String] = [:]
     private var advertisedIdentity = ""
 
@@ -232,34 +231,8 @@ final class MeshSyncService: NSObject, ObservableObject {
         guard let session, !session.connectedPeers.isEmpty, let context else { return }
         let occasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
         guard !occasions.isEmpty else { return }
-        for occasion in occasions {
-            JoinCode.assignIfNeeded(to: occasion, in: context)
-        }
         let backups = occasions.map(exportForMesh)
         send(.occasions(backups), to: session.connectedPeers)
-    }
-
-    /// Ask nearby phones for the group with this join code.
-    func fetchByJoinCode(_ raw: String) async -> BackupOccasion? {
-        let code = JoinCode.normalize(raw)
-        guard !code.isEmpty else { return nil }
-        guard let session, !session.connectedPeers.isEmpty else { return nil }
-
-        return await withCheckedContinuation { continuation in
-            joinWaiters[code, default: []].append(continuation)
-            send(.joinRequest(code), to: session.connectedPeers)
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(10))
-                self.finishJoinWait(code, with: nil)
-            }
-        }
-    }
-
-    private func finishJoinWait(_ code: String, with backup: BackupOccasion?) {
-        let waiters = joinWaiters.removeValue(forKey: code) ?? []
-        for waiter in waiters {
-            waiter.resume(returning: backup)
-        }
     }
 
     // MARK: Discovery
@@ -267,7 +240,7 @@ final class MeshSyncService: NSObject, ObservableObject {
     private func startDiscovery() {
         guard !radiosSuspended else { return }
         prepareRadiosIfNeeded()
-        if let peerID = myPeerID, advertisedIdentity != AuthSession.shared.pairingName {
+        if myPeerID != nil, advertisedIdentity != AuthSession.shared.pairingName {
             scheduleRadioRebuild()
             return
         }
@@ -401,9 +374,7 @@ final class MeshSyncService: NSObject, ObservableObject {
     }
 
     private func exportForMesh(_ occasion: Occasion) -> BackupOccasion {
-        var backup = SplitBackup.exportOccasion(occasion)
-        backup.ownerName = AuthSession.shared.pairingName
-        return backup
+        SplitBackup.exportOccasion(occasion)
     }
 
     // MARK: Messaging
@@ -423,9 +394,6 @@ final class MeshSyncService: NSObject, ObservableObject {
     private func sendManifest(to peer: MCPeerID) {
         guard let context else { return }
         let occasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
-        for occasion in occasions {
-            JoinCode.assignIfNeeded(to: occasion, in: context)
-        }
         let entries = occasions.map {
             MeshManifestEntry(id: $0.id, updatedAt: $0.updatedAt, isDeleted: $0.isDeleted)
         }
@@ -477,20 +445,18 @@ final class MeshSyncService: NSObject, ObservableObject {
 
         case .occasions(let backups):
             var appliedIDs: [UUID] = []
-            let peerName = userName(for: peer)
+            let peerName = userName(for: peer) ?? peer.displayName
             let selfNames = AuthSession.shared.selfNames
+            let localOccasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
             for backup in backups {
-                if let updated = try? SplitBackup.upsert(
+                let incoming = FriendPairing.prepareIncoming(
                     backup,
-                    into: context,
                     peerName: peerName,
-                    selfNames: selfNames
-                ) {
+                    selfNames: selfNames,
+                    localOccasions: localOccasions
+                )
+                if let updated = try? SplitBackup.upsert(incoming, into: context) {
                     appliedIDs.append(updated.id)
-                }
-                let code = JoinCode.normalize(backup.joinCode)
-                if !code.isEmpty {
-                    finishJoinWait(code, with: backup)
                 }
             }
             if !appliedIDs.isEmpty {
@@ -501,23 +467,11 @@ final class MeshSyncService: NSObject, ObservableObject {
                 }
             }
 
-        case .joinRequest(let raw):
-            let code = JoinCode.normalize(raw)
-            let localOccasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
-            if let match = localOccasions.first(where: {
-                !$0.isDeleted && JoinCode.normalize($0.joinCode) == code
-            }) {
-                send(.occasions([exportForMesh(match)]), to: [peer])
-            } else {
-                send(.joinMiss(code), to: [peer])
-            }
+        case .joinRequest:
+            send(.joinMiss(""), to: [peer])
 
-        case .joinMiss(let raw):
-            // Only give up early when nobody nearby has the group. If another
-            // peer still might answer, the 10s timeout covers it.
-            if (session?.connectedPeers.count ?? 0) <= 1 {
-                finishJoinWait(JoinCode.normalize(raw), with: nil)
-            }
+        case .joinMiss:
+            break
 
         case .hello(let name):
             if FriendPairing.isUsableName(name) {

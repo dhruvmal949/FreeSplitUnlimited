@@ -6,13 +6,23 @@
 import Foundation
 import LocalAuthentication
 
+@MainActor
 enum BiometricAuth {
     static var canEvaluateOverride: Bool?
     static var evaluateOverride: (@MainActor () async throws -> Bool)?
 
+    private static var activeContext: LAContext?
+
     static func resetOverrides() {
         canEvaluateOverride = nil
         evaluateOverride = nil
+        cancel()
+    }
+
+    static func cancel() {
+        let context = activeContext
+        activeContext = nil
+        context?.invalidate()
     }
 
     static func canEvaluate() -> (Bool, String?) {
@@ -46,11 +56,14 @@ enum BiometricAuth {
         if AppLaunchFlags.stubBiometrics {
             return true
         }
+        cancel()
         let context = LAContext()
+        activeContext = context
         context.localizedFallbackTitle = ""
         context.localizedCancelTitle = "Cancel"
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            if activeContext === context { activeContext = nil }
             throw error ?? NSError(
                 domain: LAError.errorDomain,
                 code: LAError.biometryNotAvailable.rawValue,
@@ -61,16 +74,23 @@ enum BiometricAuth {
         case .faceID, .touchID, .opticID:
             break
         default:
+            if activeContext === context { activeContext = nil }
             throw NSError(
                 domain: LAError.errorDomain,
                 code: LAError.biometryNotAvailable.rawValue,
                 userInfo: [NSLocalizedDescriptionKey: "Face ID isn’t available on this iPhone."]
             )
         }
-        let matched = try await context.evaluatePolicy(
-            .deviceOwnerAuthenticationWithBiometrics,
-            localizedReason: reason
-        )
-        return matched
+        do {
+            let matched = try await context.evaluatePolicy(
+                .deviceOwnerAuthenticationWithBiometrics,
+                localizedReason: reason
+            )
+            if activeContext === context { activeContext = nil }
+            return matched
+        } catch {
+            if activeContext === context { activeContext = nil }
+            throw error
+        }
     }
 }

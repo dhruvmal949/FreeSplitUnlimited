@@ -9,6 +9,7 @@ import UIKit
 struct USPhoneNumberField: UIViewRepresentable {
     @Binding var text: String
     var isFocused: Bool = false
+    var isActive: Bool = true
     var accessibilityIdentifier: String
 
     func makeCoordinator() -> Coordinator {
@@ -37,8 +38,23 @@ struct USPhoneNumberField: UIViewRepresentable {
         if uiView.text != formatted {
             uiView.text = formatted
         }
-        if isFocused, !uiView.isFirstResponder {
-            DispatchQueue.main.async {
+        uiView.isUserInteractionEnabled = isActive
+        uiView.textContentType = isActive ? .telephoneNumber : nil
+        uiView.keyboardType = .numberPad
+        syncFocus(uiView, coordinator: context.coordinator)
+    }
+
+    private func syncFocus(_ uiView: UITextField, coordinator: Coordinator) {
+        coordinator.wantsFocus = isFocused && isActive
+        coordinator.isActive = isActive
+        DispatchQueue.main.async {
+            if !coordinator.isActive {
+                if uiView.isFirstResponder {
+                    uiView.resignFirstResponder()
+                }
+                return
+            }
+            if coordinator.wantsFocus, !uiView.isFirstResponder {
                 uiView.becomeFirstResponder()
             }
         }
@@ -46,6 +62,8 @@ struct USPhoneNumberField: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextFieldDelegate {
         var text: Binding<String>
+        var wantsFocus = false
+        var isActive = true
 
         init(text: Binding<String>) {
             self.text = text

@@ -9,6 +9,7 @@ import UIKit
 struct EmailAddressField: UIViewRepresentable {
     @Binding var text: String
     var isFocused: Bool = false
+    var isActive: Bool = true
     var accessibilityIdentifier: String
 
     func makeCoordinator() -> Coordinator {
@@ -49,8 +50,23 @@ struct EmailAddressField: UIViewRepresentable {
                 self.text = constrained
             }
         }
-        if isFocused, !uiView.isFirstResponder {
-            DispatchQueue.main.async {
+        uiView.isUserInteractionEnabled = isActive
+        uiView.textContentType = isActive ? .username : nil
+        uiView.keyboardType = .emailAddress
+        syncFocus(uiView, coordinator: context.coordinator)
+    }
+
+    private func syncFocus(_ uiView: UITextField, coordinator: Coordinator) {
+        coordinator.wantsFocus = isFocused && isActive
+        coordinator.isActive = isActive
+        DispatchQueue.main.async {
+            if !coordinator.isActive {
+                if uiView.isFirstResponder {
+                    uiView.resignFirstResponder()
+                }
+                return
+            }
+            if coordinator.wantsFocus, !uiView.isFirstResponder {
                 uiView.becomeFirstResponder()
             }
         }
@@ -58,6 +74,8 @@ struct EmailAddressField: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextFieldDelegate {
         var text: Binding<String>
+        var wantsFocus = false
+        var isActive = true
 
         init(text: Binding<String>) {
             self.text = text

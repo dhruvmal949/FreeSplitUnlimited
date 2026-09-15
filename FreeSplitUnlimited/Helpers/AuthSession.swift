@@ -190,6 +190,7 @@ final class AuthSession: ObservableObject {
     private var currentLogin = ""
     private var currentAccountID: UUID?
     private var suppressFaceIDUntilRelaunch = false
+    private var faceIDUnlockGeneration = 0
     var testingAsksFaceIDOptIn = false
 
     var testingConfirmationCode: String {
@@ -222,6 +223,7 @@ final class AuthSession: ObservableObject {
         currentLogin = ""
         currentAccountID = nil
         suppressFaceIDUntilRelaunch = false
+        faceIDUnlockGeneration = 0
         testingAsksFaceIDOptIn = false
         rememberMe = false
         prefersFaceIDLogin = false
@@ -285,8 +287,14 @@ final class AuthSession: ObservableObject {
         return mail.isEmpty ? nil : mail
     }
 
+    func cancelPendingFaceIDUnlock() {
+        faceIDUnlockGeneration += 1
+        BiometricAuth.cancel()
+    }
+
     func unlockWithFaceID() async -> String? {
         lastError = nil
+        let generation = faceIDUnlockGeneration
         guard verifiedPasswordAccountForUnlock() != nil else {
             return "Create an account and sign in first, then you can use Face ID."
         }
@@ -296,12 +304,15 @@ final class AuthSession: ObservableObject {
         }
         do {
             let matched = try await BiometricAuth.evaluate(reason: "Open your Free Split account")
+            guard generation == faceIDUnlockGeneration else { return nil }
             guard matched else { return "Face ID didn’t match." }
             guard restoreVerifiedPasswordSession() else { return "We couldn’t restore your account. Sign in again." }
             return nil
         } catch {
             let ns = error as NSError
-            if ns.code == LAError.userCancel.rawValue || ns.code == LAError.appCancel.rawValue {
+            if ns.code == LAError.userCancel.rawValue
+                || ns.code == LAError.appCancel.rawValue
+                || ns.code == LAError.systemCancel.rawValue {
                 return nil
             }
             return error.localizedDescription

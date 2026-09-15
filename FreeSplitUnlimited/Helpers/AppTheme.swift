@@ -167,6 +167,82 @@ private struct WaveShape: Shape {
     }
 }
 
+/// Existing `AppLogo` image with extra framing — does not replace or edit the asset.
+struct BrandLogoMark: View {
+    var size: CGFloat = 96
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            AppTheme.paleGold.opacity(0.45),
+                            AppTheme.teal.opacity(0.18),
+                            .clear
+                        ],
+                        center: .center,
+                        startRadius: 8,
+                        endRadius: size * 1.15
+                    )
+                )
+                .frame(width: size * 2.15, height: size * 2.15)
+                .blur(radius: 10)
+
+            Circle()
+                .stroke(
+                    AngularGradient(
+                        colors: [
+                            AppTheme.teal,
+                            AppTheme.paleGold,
+                            AppTheme.brightTeal,
+                            AppTheme.deepTeal,
+                            AppTheme.teal
+                        ],
+                        center: .center
+                    ),
+                    lineWidth: 2.5
+                )
+                .frame(width: size + 36, height: size + 36)
+                .opacity(0.85)
+
+            Circle()
+                .stroke(Color.white.opacity(0.65), lineWidth: 1)
+                .frame(width: size + 22, height: size + 22)
+
+            Image("AppLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                        .stroke(Color.white.opacity(0.55), lineWidth: 1.5)
+                }
+                .shadow(color: AppTheme.deepTeal.opacity(0.28), radius: 14, y: 8)
+
+            logoAccent(systemImage: "person.2.fill", x: -(size * 0.72), y: size * 0.38)
+            logoAccent(systemImage: "dollarsign.circle.fill", x: size * 0.74, y: -(size * 0.32))
+            logoAccent(systemImage: "sparkle", x: size * 0.62, y: size * 0.48, small: true)
+        }
+        .frame(width: size * 2.2, height: size * 2.05)
+        .accessibilityHidden(true)
+    }
+
+    private func logoAccent(systemImage: String, x: CGFloat, y: CGFloat, small: Bool = false) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: small ? 12 : 15, weight: .semibold))
+            .foregroundStyle(AppTheme.deepTeal)
+            .padding(small ? 6 : 8)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay {
+                Circle().stroke(Color.white.opacity(0.7), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
+            .offset(x: x, y: y)
+    }
+}
+
 extension View {
     func freeSplitBackground() -> some View {
         self.background {

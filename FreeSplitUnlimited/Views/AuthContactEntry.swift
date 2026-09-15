@@ -43,15 +43,15 @@ struct ContactEntryState {
         }
     }
 
-    mutating func applyRemembered(_ raw: String) {
+    mutating func applyRemembered(_ raw: String, switchingKind: Bool = true) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if trimmed.contains("@") {
-            kind = .email
             email = trimmed
+            if switchingKind { kind = .email }
         } else {
-            kind = .phone
             phone = formattedUSPhone(trimmed)
+            if switchingKind { kind = .phone }
         }
     }
 
@@ -71,8 +71,6 @@ struct EmailPhonePicker: View {
     var hintIdentifier: String? = nil
     var onKindChange: (() -> Void)? = nil
 
-    @FocusState private var focusedKind: ContactKind?
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Picker("Email or phone", selection: $entry.kind) {
@@ -83,23 +81,26 @@ struct EmailPhonePicker: View {
             .pickerStyle(.segmented)
             .accessibilityIdentifier(pickerIdentifier)
 
-            if entry.kind == .email {
+            ZStack {
                 EmailAddressField(
                     text: $entry.email,
-                    isFocused: focusedKind == .email,
+                    isActive: entry.kind == .email,
                     accessibilityIdentifier: fieldIdentifier
                 )
-                .authInputChrome()
-                .id("\(fieldIdentifier).email")
-            } else {
+                .opacity(entry.kind == .email ? 1 : 0)
+                .allowsHitTesting(entry.kind == .email)
+                .accessibilityHidden(entry.kind != .email)
+
                 USPhoneNumberField(
                     text: $entry.phone,
-                    isFocused: focusedKind == .phone,
+                    isActive: entry.kind == .phone,
                     accessibilityIdentifier: fieldIdentifier
                 )
-                .authInputChrome()
-                .id("\(fieldIdentifier).phone")
+                .opacity(entry.kind == .phone ? 1 : 0)
+                .allowsHitTesting(entry.kind == .phone)
+                .accessibilityHidden(entry.kind != .phone)
             }
+            .authInputChrome()
 
             if let hint = entry.hint {
                 Text(hint)
@@ -109,9 +110,8 @@ struct EmailPhonePicker: View {
                     .accessibilityIdentifier(hintIdentifier ?? "\(fieldIdentifier)Hint")
             }
         }
-        .onChange(of: entry.kind) { _, kind in
+        .onChange(of: entry.kind) { _, _ in
             onKindChange?()
-            focusedKind = kind
         }
     }
 }
