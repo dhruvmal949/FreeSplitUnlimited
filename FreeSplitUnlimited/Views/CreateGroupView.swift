@@ -23,10 +23,13 @@ struct CreateGroupView: View {
     @State private var coverImageData: Data?
     @State private var showingFriendPicker = false
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
+    @State private var inviteContacts: [PickedContact] = []
+    @State private var pendingCreatedID: UUID?
+    @State private var createdOccasion: Occasion?
 
     init(onCreated: @escaping (UUID) -> Void = { _ in }) {
         self.onCreated = onCreated
-        _friends = State(initialValue: [FriendDraft(contact: ContactDirectory.me())])
+        _friends = State(initialValue: [])
     }
 
     private var trimmedName: String {
@@ -34,7 +37,7 @@ struct CreateGroupView: View {
     }
 
     private var canCreate: Bool {
-        !trimmedName.isEmpty
+        true
     }
 
     var body: some View {
@@ -75,8 +78,22 @@ struct CreateGroupView: View {
                 FriendSearchPicker(
                     contactsAllowed: contactsAllowed,
                     savedFriends: KnownFriendsStore.previouslyUsedFriends(from: modelContext),
+                    existingPeople: visibleFriends.map {
+                        PickedContact(
+                            id: $0.id.uuidString,
+                            name: $0.trimmedName,
+                            email: $0.email,
+                            phone: $0.phone
+                        )
+                    },
                     onPick: { contacts in
                         add(contacts)
+                    },
+                    onRemoveExisting: { contact in
+                        friends.removeAll {
+                            $0.trimmedName.localizedCaseInsensitiveCompare(contact.name) == .orderedSame
+                                && FriendPairing.isUsableName($0.trimmedName)
+                        }
                     },
                     onContactsAccessGranted: {
                         contactsAllowed = true
@@ -88,6 +105,12 @@ struct CreateGroupView: View {
             }
         }
         .tint(AppTheme.teal)
+        .friendInvite(
+            contacts: $inviteContacts,
+            splitName: trimmedName.isEmpty ? "Untitled group" : trimmedName,
+            onSent: markInviteSent,
+            onFinished: finishCreateIfNeeded
+        )
     }
 
     private var identityCard: some View {
@@ -133,6 +156,10 @@ struct CreateGroupView: View {
                     .padding(.vertical, 10)
                     .background(Color.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
+                Text("You can leave this blank and name the group later.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 TextField("Short note (optional)", text: $note)
                     .font(.subheadline)
                     .padding(.horizontal, 12)
@@ -175,6 +202,10 @@ struct CreateGroupView: View {
         }
     }
 
+    private var visibleFriends: [FriendDraft] {
+        friends.filter { $0.isComplete && !$0.isSelf }
+    }
+
     private var peopleSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("People")
@@ -182,14 +213,20 @@ struct CreateGroupView: View {
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(friends.filter(\.isComplete)) { friend in
-                    HStack {
-                        Image(systemName: friend.trimmedName.localizedCaseInsensitiveCompare("Me") == .orderedSame
-                              ? "person.crop.circle.fill"
-                              : "person.crop.circle")
-                            .foregroundStyle(AppTheme.teal)
-                        Text(friend.trimmedName)
-                        Spacer()
+                ForEach(visibleFriends) { friend in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Image(systemName: "person.crop.circle")
+                                .foregroundStyle(AppTheme.teal)
+                            Text(friend.trimmedName)
+                            Spacer()
+                        }
+                        if !friend.email.isEmpty || !friend.phone.isEmpty {
+                            Text([friend.email, friend.phone].filter { !$0.isEmpty }.joined(separator: " · "))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 28)
+                        }
                     }
                     .padding(.vertical, 4)
                 }
@@ -221,16 +258,26 @@ struct CreateGroupView: View {
 
     private func add(_ contacts: [PickedContact]) {
         var next: [FriendDraft] = []
-        for contact in contacts {
+        for contact in contacts where !contact.isMe {
             let draft = FriendDraft(contact: contact)
+            guard !draft.isSelf else { continue }
             let alreadyAdded = next.contains {
                 $0.trimmedName.localizedCaseInsensitiveCompare(draft.trimmedName) == .orderedSame
             }
-            if !alreadyAdded {
+            let occupied = next.map {
+                PickedContact(id: $0.id.uuidString, name: $0.trimmedName, email: $0.email, phone: $0.phone)
+            }
+            let picked = PickedContact(
+                id: draft.id.uuidString,
+                name: draft.trimmedName,
+                email: draft.email,
+                phone: draft.phone
+            )
+            if !alreadyAdded, ContactUniqueness.duplicateMessage(for: picked, in: occupied) == nil {
                 next.append(draft)
             }
         }
-        for existing in friends where existing.isComplete {
+        for existing in visibleFriends {
             let alreadyAdded = next.contains {
                 $0.trimmedName.localizedCaseInsensitiveCompare(existing.trimmedName) == .orderedSame
             }
@@ -273,12 +320,14 @@ struct CreateGroupView: View {
             groupType: (kind ?? .other).rawValue
         )
 
-        var people = friends.filter(\.isComplete).map {
-            Person(
-                name: $0.trimmedName,
-                email: $0.email.trimmingCharacters(in: .whitespacesAndNewlines),
-                phone: $0.phone.trimmingCharacters(in: .whitespacesAndNewlines)
+        var people = visibleFriends.map { draft -> Person in
+            let person = Person(
+                name: draft.trimmedName,
+                email: draft.email.trimmingCharacters(in: .whitespacesAndNewlines),
+                phone: draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
             )
+            person.setContact(email: draft.email, phone: draft.phone)
+            return person
         }
         if !people.contains(where: { $0.name.localizedCaseInsensitiveCompare("Me") == .orderedSame }) {
             people.insert(Person(name: "Me"), at: 0)
@@ -286,10 +335,43 @@ struct CreateGroupView: View {
 
         occasion.members = people
         modelContext.insert(occasion)
+        for person in occasion.members {
+            person.setContact(email: person.email, phone: person.phone)
+        }
         GroupCoverStore.save(coverImageData, for: occasion.id)
         modelContext.persist()
-        let id = occasion.id
+        createdOccasion = occasion
+        pendingCreatedID = occasion.id
+        let invitees = occasion.uniqueMembers.compactMap { person -> PickedContact? in
+            guard FriendPairing.isUsableName(person.name) else { return nil }
+            return PickedContact(
+                id: person.id.uuidString,
+                name: person.name,
+                email: person.email,
+                phone: person.phone,
+                personID: person.id,
+                didInvite: person.didInvite
+            )
+        }
+        if invitees.contains(where: { FriendInvite.needsInvite($0) }) {
+            inviteContacts = invitees
+        } else {
+            finishCreateIfNeeded()
+        }
+    }
+
+    private func finishCreateIfNeeded() {
+        guard let id = pendingCreatedID else { return }
+        pendingCreatedID = nil
+        createdOccasion = nil
         dismiss()
         onCreated(id)
+    }
+
+    private func markInviteSent(_ id: UUID) {
+        guard let person = createdOccasion?.uniqueMembers.first(where: { $0.id == id }) else { return }
+        person.didInvite = true
+        createdOccasion?.touch()
+        modelContext.persist()
     }
 }

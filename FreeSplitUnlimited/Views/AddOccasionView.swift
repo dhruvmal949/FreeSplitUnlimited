@@ -20,6 +20,10 @@ struct FriendDraft: Identifiable {
         !trimmedName.isEmpty
     }
 
+    var isSelf: Bool {
+        FriendPairing.isPlaceholderSelf(trimmedName)
+    }
+
     init(name: String = "", email: String = "", phone: String = "") {
         self.name = name
         self.email = email
@@ -44,15 +48,7 @@ struct AddOccasionView: View {
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
 
     init(initialFriends: [FriendDraft] = []) {
-        let me = FriendDraft(contact: ContactDirectory.me())
-        var drafts = initialFriends.filter(\.isComplete)
-        if drafts.isEmpty {
-            drafts = [me]
-        } else if !drafts.contains(where: {
-            $0.trimmedName.localizedCaseInsensitiveCompare(me.trimmedName) == .orderedSame
-        }) {
-            drafts.insert(me, at: 0)
-        }
+        var drafts = initialFriends.filter { $0.isComplete && !$0.isSelf }
         while drafts.count < 2 {
             drafts.append(FriendDraft())
         }
@@ -156,8 +152,9 @@ struct AddOccasionView: View {
 
     private func add(_ contacts: [PickedContact]) {
         var next: [FriendDraft] = []
-        for contact in contacts {
+        for contact in contacts where !contact.isMe {
             let draft = FriendDraft(contact: contact)
+            guard !draft.isSelf else { continue }
             let alreadyAdded = next.contains {
                 $0.trimmedName.localizedCaseInsensitiveCompare(draft.trimmedName) == .orderedSame
             }
@@ -184,18 +181,26 @@ struct AddOccasionView: View {
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             note: note.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        let people = friends
-            .filter(\.isComplete)
-            .map {
-                Person(
-                    name: $0.trimmedName,
-                    email: $0.email.trimmingCharacters(in: .whitespacesAndNewlines),
-                    phone: $0.phone.trimmingCharacters(in: .whitespacesAndNewlines)
+        var people = friends
+            .filter { $0.isComplete && !$0.isSelf }
+            .map { draft -> Person in
+                let person = Person(
+                    name: draft.trimmedName,
+                    email: draft.email.trimmingCharacters(in: .whitespacesAndNewlines),
+                    phone: draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
+                person.setContact(email: draft.email, phone: draft.phone)
+                return person
             }
+        if !people.contains(where: { FriendPairing.isPlaceholderSelf($0.name) }) {
+            people.insert(Person(name: "Me"), at: 0)
+        }
 
         occasion.members = people
         modelContext.insert(occasion)
+        for person in occasion.members {
+            person.setContact(email: person.email, phone: person.phone)
+        }
         modelContext.persist()
         dismiss()
     }

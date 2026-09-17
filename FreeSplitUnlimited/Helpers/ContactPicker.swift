@@ -36,17 +36,90 @@ enum ContactAuthorization {
 
 struct PickedContact: Identifiable, Hashable {
     let id: String
-    let name: String
-    let email: String
-    let phone: String
+    var name: String
+    var email: String
+    var phone: String
+    var emails: [String]
+    var phones: [String]
     var isMe: Bool = false
+    var personID: UUID? = nil
+    var didInvite: Bool = false
 
-    init(id: String = UUID().uuidString, name: String, email: String = "", phone: String = "", isMe: Bool = false) {
+    var contactSummary: String {
+        var seen = Set<String>()
+        var parts: [String] = []
+        for value in [email, phone] + emails + phones {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, seen.insert(trimmed.lowercased()).inserted else { continue }
+            parts.append(trimmed)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var needsContactChoice: Bool {
+        emails.count > 1 || phones.count > 1
+    }
+
+    /// True when this person already has a usable phone or email, so we should not open the add-phone screen.
+    var hasUsableContactInfo: Bool {
+        resolvedContact() != nil
+    }
+
+    /// Fill in the first usable phone/email from the contact-card lists.
+    func resolvedContact() -> PickedContact? {
+        var next = self
+        if ContactUniqueness.phoneKey(next.phone) == nil {
+            next.phone = next.phones.first { ContactUniqueness.phoneKey($0) != nil } ?? ""
+        }
+        if ContactUniqueness.emailKey(next.email) == nil {
+            next.email = next.emails.first { ContactUniqueness.emailKey($0) != nil } ?? ""
+        }
+        guard ContactUniqueness.phoneKey(next.phone) != nil || ContactUniqueness.emailKey(next.email) != nil else {
+            return nil
+        }
+        return next
+    }
+
+    init(
+        id: String = UUID().uuidString,
+        name: String,
+        email: String = "",
+        phone: String = "",
+        emails: [String] = [],
+        phones: [String] = [],
+        isMe: Bool = false,
+        personID: UUID? = nil,
+        didInvite: Bool = false
+    ) {
         self.id = id
         self.name = name
         self.email = email
         self.phone = phone
+        self.emails = emails
+        self.phones = phones
         self.isMe = isMe
+        self.personID = personID
+        self.didInvite = didInvite
+        syncContactLists()
+    }
+
+    mutating func setEnteredContact(email: String, phone: String) {
+        self.email = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.phone = phone.trimmingCharacters(in: .whitespacesAndNewlines)
+        syncContactLists()
+    }
+
+    private mutating func syncContactLists() {
+        if emails.isEmpty, !email.isEmpty {
+            emails = [email]
+        } else if !email.isEmpty, !emails.contains(email) {
+            emails.insert(email, at: 0)
+        }
+        if phones.isEmpty, !phone.isEmpty {
+            phones = [phone]
+        } else if !phone.isEmpty, !phones.contains(phone) {
+            phones.insert(phone, at: 0)
+        }
     }
 
     init?(contact: CNContact, isMe: Bool = false) {
@@ -66,19 +139,81 @@ struct PickedContact: Identifiable, Hashable {
         }
         guard !name.isEmpty else { return nil }
 
+        let emails: [String]
+        if contact.isKeyAvailable(CNContactEmailAddressesKey) {
+            emails = contact.emailAddresses.map { $0.value as String }.filter { !$0.isEmpty }
+        } else {
+            emails = []
+        }
+        let phones: [String]
+        if contact.isKeyAvailable(CNContactPhoneNumbersKey) {
+            phones = contact.phoneNumbers.map(\.value.stringValue).filter { !$0.isEmpty }
+        } else {
+            phones = []
+        }
+
         self.id = isMe ? "me" : contact.identifier
         self.name = name
-        if contact.isKeyAvailable(CNContactEmailAddressesKey) {
-            self.email = contact.emailAddresses.first.map { $0.value as String } ?? ""
-        } else {
-            self.email = ""
-        }
-        if contact.isKeyAvailable(CNContactPhoneNumbersKey) {
-            self.phone = contact.phoneNumbers.first?.value.stringValue ?? ""
-        } else {
-            self.phone = ""
-        }
+        self.email = emails.first ?? ""
+        self.phone = phones.first ?? ""
+        self.emails = emails
+        self.phones = phones
         self.isMe = isMe
+        self.personID = nil
+        self.didInvite = false
+    }
+}
+
+enum ContactUniqueness {
+    static func phoneKey(_ raw: String) -> String? {
+        let digits = usPhoneDigits(raw)
+        return digits.count == 10 ? digits : nil
+    }
+
+    static func emailKey(_ raw: String) -> String? {
+        let email = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return isValidEmail(email) ? email : nil
+    }
+
+    static func ownerName(
+        usingPhone raw: String,
+        in people: [PickedContact],
+        excludingID: String? = nil
+    ) -> String? {
+        guard let key = phoneKey(raw) else { return nil }
+        return people.first { person in
+            guard !matches(person, excludingID) else { return false }
+            return phoneKey(person.phone) == key
+                || person.phones.contains { phoneKey($0) == key }
+        }?.name
+    }
+
+    static func ownerName(
+        usingEmail raw: String,
+        in people: [PickedContact],
+        excludingID: String? = nil
+    ) -> String? {
+        guard let key = emailKey(raw) else { return nil }
+        return people.first { person in
+            guard !matches(person, excludingID) else { return false }
+            return emailKey(person.email) == key
+                || person.emails.contains { emailKey($0) == key }
+        }?.name
+    }
+
+    static func duplicateMessage(for contact: PickedContact, in people: [PickedContact]) -> String? {
+        if let name = ownerName(usingPhone: contact.phone, in: people, excludingID: contact.id) {
+            return "\(name) already uses this phone number. Enter a different number."
+        }
+        if let name = ownerName(usingEmail: contact.email, in: people, excludingID: contact.id) {
+            return "\(name) already uses this email. Enter a different email."
+        }
+        return nil
+    }
+
+    private static func matches(_ person: PickedContact, _ excludingID: String?) -> Bool {
+        guard let excludingID, !excludingID.isEmpty else { return false }
+        return person.id == excludingID || person.personID?.uuidString == excludingID
     }
 }
 
@@ -104,9 +239,40 @@ enum ContactDirectory {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 1 else { return [] }
         let store = CNContactStore()
-        let predicate = CNContact.predicateForContacts(matchingName: trimmed)
-        let contacts = (try? store.unifiedContacts(matching: predicate, keysToFetch: keys)) ?? []
-        return contacts.compactMap { PickedContact(contact: $0) }
+        var seen = Set<String>()
+        var results: [PickedContact] = []
+
+        func append(_ contacts: [CNContact]) {
+            for contact in contacts {
+                guard let picked = PickedContact(contact: contact), seen.insert(picked.id).inserted else { continue }
+                results.append(picked)
+            }
+        }
+
+        append((try? store.unifiedContacts(
+            matching: CNContact.predicateForContacts(matchingName: trimmed),
+            keysToFetch: keys
+        )) ?? [])
+
+        if trimmed.contains("@") {
+            append((try? store.unifiedContacts(
+                matching: CNContact.predicateForContacts(matchingEmailAddress: trimmed),
+                keysToFetch: keys
+            )) ?? [])
+        }
+
+        let digits = trimmed.filter(\.isNumber)
+        if digits.count >= 3 {
+            let request = CNContactFetchRequest(keysToFetch: keys)
+            try? store.enumerateContacts(with: request) { contact, stop in
+                let phones = contact.phoneNumbers.map { $0.value.stringValue.filter(\.isNumber) }
+                if phones.contains(where: { $0.contains(digits) }) {
+                    append([contact])
+                }
+                if results.count >= 40 { stop.pointee = true }
+            }
+        }
+        return results
     }
 }
 
@@ -121,7 +287,8 @@ struct FriendSearchBar: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
             TextField(placeholder, text: $query)
-                .textInputAutocapitalization(.words)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.default)
                 .autocorrectionDisabled()
                 .focused(isFocused)
                 .accessibilityIdentifier("friendSearchField")
@@ -144,20 +311,25 @@ struct FriendSearchBar: View {
     }
 }
 
-/// Search Contacts (if allowed) or saved friends. "Me" is already added.
+/// Search Contacts (if allowed) or saved friends. "Me" is added to the group in the background, not shown here.
 struct FriendSearchPicker: View {
     let contactsAllowed: Bool
     let savedFriends: [PickedContact]
     /// `nil` means unlimited extra people. `1` is used when creating a one-to-one split.
     var selectionLimit: Int?
     var onPick: ([PickedContact]) -> Void
+    var onRemoveExisting: (PickedContact) -> Void = { _ in }
     var onContactsAccessGranted: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var query = ""
-    @State private var selected: [PickedContact] = [ContactDirectory.me()]
+    @State private var selected: [PickedContact] = []
     @State private var usingContacts: Bool
+    @State private var friendToRemove: PickedContact?
+    @State private var pendingAdd: PickedContact?
+    @State private var detailsContact: PickedContact?
+    @State private var duplicateWarning: String?
     @FocusState private var searchFocused: Bool
 
     private var otherSelectedCount: Int {
@@ -172,39 +344,100 @@ struct FriendSearchPicker: View {
     init(
         contactsAllowed: Bool,
         savedFriends: [PickedContact],
+        existingPeople: [PickedContact] = [],
         selectionLimit: Int? = nil,
         onPick: @escaping ([PickedContact]) -> Void,
+        onRemoveExisting: @escaping (PickedContact) -> Void = { _ in },
         onContactsAccessGranted: @escaping () -> Void = {}
     ) {
         self.contactsAllowed = contactsAllowed
         self.savedFriends = savedFriends
         self.selectionLimit = selectionLimit
         self.onPick = onPick
+        self.onRemoveExisting = onRemoveExisting
         self.onContactsAccessGranted = onContactsAccessGranted
+        let start = existingPeople.filter {
+            !$0.isMe && FriendPairing.isUsableName($0.name)
+        }
+        _selected = State(initialValue: start)
         _usingContacts = State(initialValue: contactsAllowed)
     }
 
     private var placeholder: String {
-        usingContacts ? "Search contacts" : "Search saved friends"
+        usingContacts ? "Search name, email, or phone" : "Search saved friends"
     }
 
     private var typedNameToAdd: String? {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 1 else { return nil }
-        guard trimmed.localizedCaseInsensitiveCompare("Me") != .orderedSame else { return nil }
+        guard FriendPairing.isUsableName(trimmed) else { return nil }
         let alreadySelected = selected.contains {
             $0.name.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
         }
-        return alreadySelected ? nil : trimmed
+        guard !alreadySelected else { return nil }
+        if savedContact(named: trimmed) != nil { return nil }
+        return trimmed
     }
 
-    private func addTypedName(_ name: String) {
-        guard canAddMore else { return }
-        if selectionLimit == 1 {
-            selected.removeAll { !$0.isMe }
+    private func savedContact(named name: String) -> PickedContact? {
+        savedFriends.first {
+            $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame
+        } ?? KnownFriendsStore.contact(named: name)
+    }
+
+    private func contactForTypedName(_ name: String) -> PickedContact {
+        savedContact(named: name) ?? PickedContact(name: name)
+    }
+
+    private var currentOtherFriend: PickedContact? {
+        selected.first { !$0.isMe }
+    }
+
+    private func requestAdd(_ friend: PickedContact) {
+        let alreadySelected = selected.contains {
+            $0.id == friend.id
+                || $0.personID != nil && $0.personID == friend.personID
+                || $0.name.localizedCaseInsensitiveCompare(friend.name) == .orderedSame
         }
-        selected.append(PickedContact(name: name))
+        guard !alreadySelected else { return }
+        if let ready = friend.resolvedContact() {
+            commitAdd(ready)
+            return
+        }
+        detailsContact = friend
+    }
+
+    private func commitAdd(_ friend: PickedContact) {
+        if let message = ContactUniqueness.duplicateMessage(for: friend, in: selected) {
+            duplicateWarning = message
+            return
+        }
+        if canAddMore {
+            KnownFriendsStore.remember([friend])
+            selected.append(friend)
+            query = ""
+            finishIfSingleSelection()
+            return
+        }
+        if selectionLimit == 1 {
+            pendingAdd = friend
+        }
+    }
+
+    private func confirmReplace() {
+        guard let pendingAdd else { return }
+        selected.removeAll { !$0.isMe }
+        KnownFriendsStore.remember([pendingAdd])
+        selected.append(pendingAdd)
         query = ""
+        self.pendingAdd = nil
+        finishIfSingleSelection()
+    }
+
+    private func finishIfSingleSelection() {
+        guard selectionLimit == 1, otherSelectedCount >= 1 else { return }
+        onPick(selected)
+        dismiss()
     }
 
     private var results: [PickedContact] {
@@ -219,7 +452,12 @@ struct FriendSearchPicker: View {
         if trimmed.isEmpty {
             saved = savedFriends
         } else {
-            saved = savedFriends.filter { $0.name.localizedStandardContains(trimmed) }
+            saved = savedFriends.filter {
+                $0.name.localizedStandardContains(trimmed)
+                    || $0.email.localizedStandardContains(trimmed)
+                    || $0.phone.localizedStandardContains(trimmed)
+                    || $0.contactSummary.localizedStandardContains(trimmed)
+            }
         }
         matches.append(contentsOf: saved)
 
@@ -243,11 +481,10 @@ struct FriendSearchPicker: View {
                 )
 
                 List {
-                    Section("Added to split") {
-                        ForEach(selected) { friend in
-                            friendRow(friend, isSelected: true) {
-                                guard !friend.isMe else { return }
-                                selected.removeAll { $0.id == friend.id }
+                    if !selected.isEmpty {
+                        Section("Added to split") {
+                            ForEach(selected) { friend in
+                                addedFriendRow(friend)
                             }
                         }
                     }
@@ -255,30 +492,31 @@ struct FriendSearchPicker: View {
                     if let typedName = typedNameToAdd {
                         Section {
                             Button {
-                                addTypedName(typedName)
+                                requestAdd(contactForTypedName(typedName))
                             } label: {
-                                Label("Add \(typedName)", systemImage: "plus.circle.fill")
+                                HStack(spacing: 14) {
+                                    Image(systemName: "person.badge.plus")
+                                        .font(.title2)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 32)
+                                    Text("Add “\(typedName)” to Free Split")
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                }
                             }
-                            .disabled(!canAddMore)
                             .accessibilityIdentifier("addTypedName")
                         }
                     }
 
-                    Section(usingContacts ? "Contacts" : "Saved friends") {
+                    Section(usingContacts ? "From your contacts" : "Saved friends") {
                         if results.isEmpty {
                             Text(emptyResultsText)
                                 .foregroundStyle(.secondary)
                         } else {
                             ForEach(results) { friend in
                                 friendRow(friend, isSelected: false) {
-                                    guard canAddMore else { return }
-                                    if selectionLimit == 1 {
-                                        selected.removeAll { !$0.isMe }
-                                    }
-                                    selected.append(friend)
-                                    query = ""
+                                    requestAdd(friend)
                                 }
-                                .disabled(!canAddMore)
                             }
                         }
                     }
@@ -305,7 +543,7 @@ struct FriendSearchPicker: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .freeSplitBackground()
-            .navigationTitle(selectionLimit == 1 ? "Add Friend" : "Add Friends")
+            .navigationTitle("Add friends")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -328,8 +566,83 @@ struct FriendSearchPicker: View {
                 usingContacts = true
                 onContactsAccessGranted()
             }
+            .confirmationDialog(
+                confirmationTitle,
+                isPresented: Binding(
+                    get: { friendToRemove != nil || pendingAdd != nil },
+                    set: { if !$0 {
+                        friendToRemove = nil
+                        pendingAdd = nil
+                    } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if friendToRemove != nil {
+                    Button("Delete", role: .destructive) {
+                        removeFriendFromSelection()
+                    }
+                }
+                if pendingAdd != nil {
+                    Button("Replace") {
+                        confirmReplace()
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    friendToRemove = nil
+                    pendingAdd = nil
+                }
+            } message: {
+                if friendToRemove != nil {
+                    Text("They will be removed from this split.")
+                } else if let current = currentOtherFriend, let pending = pendingAdd {
+                    Text("This split can have one friend. \(pending.name) will replace \(current.name).")
+                } else {
+                    Text("This split can have one friend. Adding someone new replaces the person already selected.")
+                }
+            }
+            .sheet(item: $detailsContact) { friend in
+                NavigationStack {
+                    AddFriendDetailsView(
+                        initial: friend,
+                        occupiedPeople: selected,
+                        onCancel: { detailsContact = nil },
+                        onNext: { completed in
+                            detailsContact = nil
+                            commitAdd(completed)
+                        }
+                    )
+                }
+                .tint(AppTheme.teal)
+            }
+            .alert("Number already used", isPresented: Binding(
+                get: { duplicateWarning != nil },
+                set: { if !$0 { duplicateWarning = nil } }
+            )) {
+                Button("OK", role: .cancel) { duplicateWarning = nil }
+            } message: {
+                Text(duplicateWarning ?? "")
+            }
         }
         .tint(AppTheme.teal)
+    }
+
+    private var confirmationTitle: String {
+        if let friendToRemove {
+            return "Delete \(friendToRemove.name)?"
+        }
+        if pendingAdd != nil {
+            return "Replace \(currentOtherFriend?.name ?? "this person")?"
+        }
+        return "Please confirm"
+    }
+
+    private func removeFriendFromSelection() {
+        guard let friendToRemove else { return }
+        selected.removeAll { $0.id == friendToRemove.id || $0.personID == friendToRemove.personID }
+        if friendToRemove.personID != nil {
+            onRemoveExisting(friendToRemove)
+        }
+        self.friendToRemove = nil
     }
 
     private var emptyResultsText: String {
@@ -340,6 +653,41 @@ struct FriendSearchPicker: View {
                 : "No other saved friends yet. Search or open Settings to use Contacts."
         }
         return "No matches for “\(trimmed)”."
+    }
+
+    private func addedFriendRow(_ friend: PickedContact) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(friend.name)
+                    if friend.isMe {
+                        Text("You")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(AppTheme.teal.opacity(0.18), in: Capsule())
+                            .foregroundStyle(AppTheme.teal)
+                    }
+                }
+                if !friend.contactSummary.isEmpty {
+                    Text(friend.contactSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if friend.isMe {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(AppTheme.teal)
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            if !friend.isMe {
+                Button("Delete", role: .destructive) {
+                    friendToRemove = friend
+                }
+            }
+        }
     }
 
     private func friendRow(_ friend: PickedContact, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -358,8 +706,8 @@ struct FriendSearchPicker: View {
                                 .foregroundStyle(AppTheme.teal)
                         }
                     }
-                    if !friend.email.isEmpty || !friend.phone.isEmpty {
-                        Text([friend.email, friend.phone].filter { !$0.isEmpty }.joined(separator: " · "))
+                    if !friend.contactSummary.isEmpty {
+                        Text(friend.contactSummary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

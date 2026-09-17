@@ -15,6 +15,8 @@ struct EditFriendView: View {
     var person: Person? = nil
 
     @State private var name = ""
+    @State private var email = ""
+    @State private var phone = ""
 
     private var isEditing: Bool { person != nil }
 
@@ -40,12 +42,22 @@ struct EditFriendView: View {
                     TextField("Name", text: $name)
                         .textContentType(.name)
                         .textInputAutocapitalization(.words)
+                    TextField("Email", text: $email)
+                        .keyboardType(.emailAddress)
+                        .textContentType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("Phone", text: $phone)
+                        .keyboardType(.phonePad)
+                        .textContentType(.telephoneNumber)
                 } header: {
                     Text("Friend details")
                 } footer: {
                     if !trimmedName.isEmpty && !isNameUnique {
                         Text("Someone with this name is already in this split.")
                             .foregroundStyle(.red)
+                    } else {
+                        Text("Email or phone is used to reach this person. If both are empty, you’ll be asked before saving an expense.")
                     }
                 }
 
@@ -77,6 +89,8 @@ struct EditFriendView: View {
             .onAppear {
                 if let person {
                     name = person.name
+                    email = person.email
+                    phone = person.phone
                 }
             }
         }
@@ -85,12 +99,17 @@ struct EditFriendView: View {
     private func save() {
         guard canSave else { return }
 
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPhone = phone.trimmingCharacters(in: .whitespacesAndNewlines)
+
         if let person {
             person.name = trimmedName
+            person.setContact(email: trimmedEmail, phone: trimmedPhone)
         } else {
-            let newPerson = Person(name: trimmedName)
+            let newPerson = Person(name: trimmedName, email: trimmedEmail, phone: trimmedPhone)
             newPerson.occasion = occasion
             modelContext.insert(newPerson)
+            newPerson.setContact(email: trimmedEmail, phone: trimmedPhone)
         }
         occasion.touch()
         modelContext.persist()

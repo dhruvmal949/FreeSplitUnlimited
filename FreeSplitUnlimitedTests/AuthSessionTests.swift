@@ -234,7 +234,13 @@ final class AuthSessionTests: XCTestCase {
         XCTAssertFalse(session.isAuthenticated)
         XCTAssertTrue(session.prefersFaceIDLogin)
         XCTAssertFalse(session.shouldAutoPromptFaceID)
+        XCTAssertTrue(session.isFaceIDInSignOutCooldown)
         XCTAssertTrue(session.hasUnlockableAccount)
+
+        session.expireFaceIDSignOutCooldownForTesting()
+        BiometricAuth.canEvaluateOverride = true
+        XCTAssertTrue(session.shouldAutoPromptFaceID)
+        XCTAssertGreaterThan(AuthSession.signOutFaceIDCooldown, 4)
     }
 
     func testFaceIDOptInNoShowsLoginOnReturn() {

@@ -17,6 +17,9 @@ struct CreateFriendSplitView: View {
     @State private var friendPhone = ""
     @State private var showingFriendPicker = false
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
+    @State private var inviteContacts: [PickedContact] = []
+    @State private var pendingCreatedID: UUID?
+    @State private var createdOccasion: Occasion?
 
     private var trimmedFriendName: String {
         friendName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -102,6 +105,12 @@ struct CreateFriendSplitView: View {
             }
         }
         .tint(AppTheme.teal)
+        .friendInvite(
+            contacts: $inviteContacts,
+            splitName: trimmedFriendName,
+            onSent: markInviteSent,
+            onFinished: finishCreateIfNeeded
+        )
     }
 
     @MainActor
@@ -128,18 +137,47 @@ struct CreateFriendSplitView: View {
             name: trimmedFriendName,
             groupType: SplitKind.oneToOne
         )
+        let friendPerson = Person(
+            name: trimmedFriendName,
+            email: friendEmail.trimmingCharacters(in: .whitespacesAndNewlines),
+            phone: friendPhone.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         occasion.members = [
             Person(name: "Me"),
-            Person(
-                name: trimmedFriendName,
-                email: friendEmail.trimmingCharacters(in: .whitespacesAndNewlines),
-                phone: friendPhone.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
+            friendPerson
         ]
         modelContext.insert(occasion)
+        friendPerson.setContact(email: friendEmail, phone: friendPhone)
         modelContext.persist()
-        let id = occasion.id
+        createdOccasion = occasion
+        pendingCreatedID = occasion.id
+        let friend = occasion.members.first { FriendPairing.isUsableName($0.name) }
+        let inviteContact = PickedContact(
+            id: friend?.id.uuidString ?? UUID().uuidString,
+            name: trimmedFriendName,
+            email: friendEmail.trimmingCharacters(in: .whitespacesAndNewlines),
+            phone: friendPhone.trimmingCharacters(in: .whitespacesAndNewlines),
+            personID: friend?.id
+        )
+        if FriendInvite.needsInvite(inviteContact) {
+            inviteContacts = [inviteContact]
+        } else {
+            finishCreateIfNeeded()
+        }
+    }
+
+    private func finishCreateIfNeeded() {
+        guard let id = pendingCreatedID else { return }
+        pendingCreatedID = nil
+        createdOccasion = nil
         dismiss()
         onCreated(id)
+    }
+
+    private func markInviteSent(_ id: UUID) {
+        guard let person = createdOccasion?.uniqueMembers.first(where: { $0.id == id }) else { return }
+        person.didInvite = true
+        createdOccasion?.touch()
+        modelContext.persist()
     }
 }

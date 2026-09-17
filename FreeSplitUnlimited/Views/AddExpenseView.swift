@@ -23,6 +23,7 @@ struct AddExpenseView: View {
     @State private var date = Date()
     @State private var didLoadExisting = false
     @State private var sharePayload: ActivitySharePayload?
+    @State private var showingMissingContactAlert = false
 
     private var isEditing: Bool { expenseToEdit != nil }
 
@@ -107,7 +108,7 @@ struct AddExpenseView: View {
                     HStack {
                         Text("Group")
                         Spacer()
-                        Text(occasion.name)
+                        Text(occasion.displayName)
                             .fontWeight(.semibold)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.trailing)
@@ -180,7 +181,7 @@ struct AddExpenseView: View {
 
                 Section {
                     Button {
-                        save()
+                        requestSave()
                     } label: {
                         Text(isEditing ? "Save Changes" : "Save Expense")
                             .font(.headline)
@@ -199,7 +200,7 @@ struct AddExpenseView: View {
                     VStack(spacing: 1) {
                         Text(isEditing ? "Edit Expense" : "Add Expense")
                             .font(.headline)
-                        Text(occasion.name)
+                        Text(occasion.displayName)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -218,7 +219,7 @@ struct AddExpenseView: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isEditing ? "Save" : "Add") { save() }
+                    Button(isEditing ? "Save" : "Add") { requestSave() }
                         .fontWeight(.semibold)
                         .disabled(!canSave)
                 }
@@ -232,6 +233,36 @@ struct AddExpenseView: View {
             .sheet(item: $sharePayload) { payload in
                 ActivityShareSheet(payload: payload)
             }
+            .alert("Missing email or phone", isPresented: $showingMissingContactAlert) {
+                Button("Save Anyway") { save() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(missingContactMessage)
+            }
+        }
+    }
+
+    private var peopleMissingContact: [Person] {
+        var ids = selectedParticipantIDs
+        if let paidByID { ids.insert(paidByID) }
+        return sortedMembers.filter { person in
+            ids.contains(person.id)
+                && FriendPairing.isUsableName(person.name)
+                && !person.hasContactInfo
+        }
+    }
+
+    private var missingContactMessage: String {
+        let names = peopleMissingContact.map(\.name).joined(separator: ", ")
+        return "\(names) \(peopleMissingContact.count == 1 ? "has" : "have") no email or phone. Add contact info in Group Settings so they can be reached, or save this expense anyway."
+    }
+
+    private func requestSave() {
+        guard canSave else { return }
+        if peopleMissingContact.isEmpty {
+            save()
+        } else {
+            showingMissingContactAlert = true
         }
     }
 

@@ -132,4 +132,51 @@ final class FreeSplitUnlimitedTests: XCTestCase {
         XCTAssertFalse(occasion.isOneToOne)
         XCTAssertTrue(occasion.appearsInGroups)
     }
+
+    func testDeletedGroupIsHiddenFromHome() {
+        DeletedGroupsStore.resetForTesting()
+        let occasion = Occasion(name: "Dallas", groupType: GroupKind.other.rawValue)
+        occasion.members = [Person(name: "Me"), Person(name: "dhruv"), Person(name: "suresh")]
+        XCTAssertTrue(occasion.appearsInGroups)
+        XCTAssertTrue(occasion.shouldAppearInLists)
+
+        occasion.markDeleted()
+
+        XCTAssertTrue(occasion.isDeleted)
+        XCTAssertTrue(DeletedGroupsStore.contains(occasion.id))
+        XCTAssertFalse(occasion.shouldAppearInLists)
+
+        occasion.isDeleted = false
+        XCTAssertTrue(DeletedGroupsStore.contains(occasion.id))
+        XCTAssertFalse(occasion.shouldAppearInLists)
+        DeletedGroupsStore.resetForTesting()
+    }
+
+    func testGoogleOAuthOpensGoogleAuthLogin() {
+        let pkce = GoogleOAuth.makePKCE()
+        XCTAssertFalse(pkce.verifier.isEmpty)
+        XCTAssertFalse(pkce.challenge.isEmpty)
+        XCTAssertNotEqual(pkce.verifier, pkce.challenge)
+
+        let url = GoogleOAuth.authorizationURL(
+            clientID: "123-abc.apps.googleusercontent.com",
+            redirectURI: "com.googleusercontent.apps.123-abc:/oauth2redirect",
+            challenge: pkce.challenge,
+            loginHint: "pat.lee@gmail.com"
+        )
+        XCTAssertEqual(url?.host, "accounts.google.com")
+        XCTAssertTrue(url?.path.contains("oauth2") == true)
+        let query = url?.absoluteString ?? ""
+        XCTAssertTrue(query.contains("code_challenge"))
+        XCTAssertTrue(query.contains("select_account"))
+        XCTAssertTrue(query.contains("openid"))
+        XCTAssertTrue(query.contains("pat.lee"))
+    }
+
+    func testGoogleOAuthReadsAuthorizationCode() {
+        let url = URL(string: "com.pramela.freesplitunlimited:/oauth2redirect?code=abc123&scope=email")!
+        XCTAssertEqual(GoogleOAuth.authCode(from: url), "abc123")
+        let denied = URL(string: "com.pramela.freesplitunlimited:/oauth2redirect?error=access_denied")!
+        XCTAssertNil(GoogleOAuth.authCode(from: denied))
+    }
 }

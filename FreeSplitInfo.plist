@@ -47,7 +47,20 @@
 				<string>freesplit</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.pramela.freesplitunlimited.google-oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.pramela.freesplitunlimited</string>
+				<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
+			</array>
+		</dict>
 	</array>
+	<key>GIDClientID</key>
+	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>venmo</string>

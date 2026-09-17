@@ -234,6 +234,15 @@ enum SplitBackup {
         let existing = ((try? context.fetch(FetchDescriptor<Occasion>())) ?? [])
             .first { $0.id == backup.id }
 
+        if DeletedGroupsStore.contains(backup.id), !force {
+            if let existing {
+                existing.isDeleted = true
+                existing.touch()
+                try context.save()
+            }
+            return existing
+        }
+
         if let existing, !force, existing.updatedAt >= backup.updatedAt {
             return nil
         }
@@ -310,6 +319,7 @@ enum SplitBackup {
                 )
                 person.occasion = occasion
                 context.insert(person)
+                person.setContact(email: backup.email, phone: backup.phone)
                 peopleByID[backup.id] = person
             }
         }
@@ -407,6 +417,7 @@ enum SplitBackup {
             person.occasion = occasion
             peopleByID[member.id] = person
             context.insert(person)
+            person.setContact(email: member.email, phone: member.phone)
         }
 
         var seenExpenseIDs = Set<UUID>()

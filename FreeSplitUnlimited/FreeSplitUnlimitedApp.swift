@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     ) -> Bool {
         if let url = launchOptions?[.url] as? URL {
             IncomingURLCapture.capture(url)
+            _ = SocialAuthController.shared.handleURL(url)
         }
         return true
     }
@@ -26,6 +27,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         options: [UIApplication.OpenURLOptionsKey: Any] = [:]
     ) -> Bool {
         IncomingURLCapture.capture(url)
+        _ = SocialAuthController.shared.handleURL(url)
         return true
     }
 }
@@ -37,6 +39,10 @@ struct FreeSplitUnlimitedApp: App {
     private let container: ModelContainer?
 
     init() {
+        if AppLaunchFlags.isUITesting {
+            KnownFriendsStore.resetForTesting()
+            DeletedGroupsStore.resetForTesting()
+        }
         container = Self.makeContainer()
     }
 
@@ -168,6 +174,7 @@ private struct RootView: View {
             }
         }
         .onOpenURL { url in
+            if SocialAuthController.shared.handleURL(url) { return }
             IncomingURLCapture.capture(url)
             IncomingSplitOpener.shared.flushWhenReady()
         }

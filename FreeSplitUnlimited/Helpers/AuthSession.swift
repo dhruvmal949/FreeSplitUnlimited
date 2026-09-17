@@ -108,6 +108,11 @@ private struct RememberedCredentials: Codable {
     var password: String
 }
 
+/// Simulator unit tests often cannot use Keychain (`CODE_SIGNING_ALLOWED=NO` or missing entitlements).
+private enum TestingAuthStore {
+    static var items: [String: Data] = [:]
+}
+
 @MainActor
 final class AuthSession: ObservableObject {
     static let shared = AuthSession()
@@ -189,8 +194,10 @@ final class AuthSession: ObservableObject {
     private var stagedPasswordLogin: (account: LocalAccount, login: String, password: String)?
     private var currentLogin = ""
     private var currentAccountID: UUID?
-    private var suppressFaceIDUntilRelaunch = false
+    private var suppressFaceIDUntil: Date?
     private var faceIDUnlockGeneration = 0
+    /// After sign-out, wait this long before Face ID auto-opens the account again.
+    static let signOutFaceIDCooldown: TimeInterval = 5
     var testingAsksFaceIDOptIn = false
 
     var testingConfirmationCode: String {
@@ -222,7 +229,7 @@ final class AuthSession: ObservableObject {
         stagedPasswordLogin = nil
         currentLogin = ""
         currentAccountID = nil
-        suppressFaceIDUntilRelaunch = false
+        suppressFaceIDUntil = nil
         faceIDUnlockGeneration = 0
         testingAsksFaceIDOptIn = false
         rememberMe = false
@@ -367,7 +374,21 @@ final class AuthSession: ObservableObject {
     }
 
     var shouldAutoPromptFaceID: Bool {
-        prefersFaceIDLogin && canOfferFaceID && !suppressFaceIDUntilRelaunch && !AppLaunchFlags.isUITesting
+        prefersFaceIDLogin && canOfferFaceID && !isFaceIDInSignOutCooldown && !AppLaunchFlags.isUITesting
+    }
+
+    var isFaceIDInSignOutCooldown: Bool {
+        guard let suppressFaceIDUntil else { return false }
+        return Date() < suppressFaceIDUntil
+    }
+
+    var autoPromptDelayRemaining: TimeInterval {
+        guard let suppressFaceIDUntil else { return 0 }
+        return max(0, suppressFaceIDUntil.timeIntervalSinceNow)
+    }
+
+    func expireFaceIDSignOutCooldownForTesting() {
+        suppressFaceIDUntil = nil
     }
 
     func beginRegistration(
@@ -604,7 +625,7 @@ final class AuthSession: ObservableObject {
         stagedPasswordLogin = nil
         currentLogin = ""
         currentAccountID = nil
-        suppressFaceIDUntilRelaunch = true
+        suppressFaceIDUntil = Date().addingTimeInterval(Self.signOutFaceIDCooldown)
         clearPersistedSession()
     }
 
@@ -683,31 +704,12 @@ final class AuthSession: ObservableObject {
             accountID: currentAccountID
         )
         guard let data = try? JSONEncoder().encode(saved) else { return }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: Self.sessionAccount
-        ]
-        SecItemDelete(query as CFDictionary)
-        var add = query
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(add as CFDictionary, nil)
+        writeKeychain(account: Self.sessionAccount, data: data)
     }
 
     private func restoreSession() {
         guard rememberMe else { return }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: Self.sessionAccount,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess,
-              let data = item as? Data,
+        guard let data = readKeychain(account: Self.sessionAccount),
               let saved = try? JSONDecoder().decode(PersistedAuth.self, from: data) else {
             return
         }
@@ -811,6 +813,7 @@ final class AuthSession: ObservableObject {
     }
 
     private func wipeTestingAuthStore() {
+        TestingAuthStore.items.removeAll()
         deleteKeychain(account: Self.keychainAccount)
         deleteKeychain(account: Self.sessionAccount)
         deleteKeychain(account: Self.unlockAccount)
@@ -853,25 +856,24 @@ final class AuthSession: ObservableObject {
     }
 
     private func writeKeychain(account: String, data: Data) {
+        if AppLaunchFlags.isUnitTesting {
+            TestingAuthStore.items[account] = data
+            return
+        }
         deleteKeychain(account: account)
-        let add: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        ]
+        var add = keychainQuery(account: account)
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         SecItemAdd(add as CFDictionary, nil)
     }
 
     private func readKeychain(account: String) -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
+        if AppLaunchFlags.isUnitTesting {
+            return TestingAuthStore.items[account]
+        }
+        var query = keychainQuery(account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         guard status == errSecSuccess else { return nil }
@@ -879,12 +881,20 @@ final class AuthSession: ObservableObject {
     }
 
     private func deleteKeychain(account: String) {
-        let query: [String: Any] = [
+        if AppLaunchFlags.isUnitTesting {
+            TestingAuthStore.items.removeValue(forKey: account)
+            return
+        }
+        SecItemDelete(keychainQuery(account: account) as CFDictionary)
+    }
+
+    private func keychainQuery(account: String) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: true
         ]
-        SecItemDelete(query as CFDictionary)
     }
 
     private func hashPassword(_ password: String, salt: String) -> String {
@@ -893,30 +903,12 @@ final class AuthSession: ObservableObject {
     }
 
     private func loadAccounts() -> [LocalAccount] {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: Self.keychainAccount,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return [] }
+        guard let data = readKeychain(account: Self.keychainAccount) else { return [] }
         return (try? JSONDecoder().decode([LocalAccount].self, from: data)) ?? []
     }
 
     private func saveAccounts(_ accounts: [LocalAccount]) {
         guard let data = try? JSONEncoder().encode(accounts) else { return }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: Self.keychainAccount
-        ]
-        SecItemDelete(query as CFDictionary)
-        var add = query
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(add as CFDictionary, nil)
+        writeKeychain(account: Self.keychainAccount, data: data)
     }
 }

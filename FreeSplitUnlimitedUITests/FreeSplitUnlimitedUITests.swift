@@ -164,6 +164,12 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         XCTAssertTrue(typed.waitForExistence(timeout: 5), "Should be able to add \(name) by typing")
         typed.tap()
 
+        let contactField = app.textFields["addFriendContactField"]
+        XCTAssertTrue(contactField.waitForExistence(timeout: 5), "Add friend details should open")
+        contactField.tap()
+        contactField.typeText("\(name.lowercased())@example.com")
+        app.buttons["addFriendNextButton"].tap()
+
         let confirm = app.buttons["confirmAddFriends"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 4))
         confirm.tap()

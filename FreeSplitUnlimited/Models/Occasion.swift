@@ -43,6 +43,11 @@ final class Occasion {
         self.expenses = []
     }
 
+    var displayName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Untitled group" : trimmed
+    }
+
     var kind: GroupKind {
         GroupKind.resolve(groupType)
     }
@@ -57,9 +62,21 @@ final class Occasion {
         !isOneToOne || uniqueMembers.count > 2
     }
 
+    /// Hidden after the user deletes the group, even if a copy is restored locally.
+    var shouldAppearInLists: Bool {
+        !isDeleted && !DeletedGroupsStore.contains(id)
+    }
+
     /// Marks this split as changed so sync (mesh + cloud) knows to propagate it.
     func touch() {
         updatedAt = .now
+    }
+
+    /// Soft-delete so Home hides the group and nearby phones receive the removal.
+    func markDeleted() {
+        isDeleted = true
+        DeletedGroupsStore.remember(id)
+        touch()
     }
 
     /// When a one-to-one split grows past two people, save it as a group.

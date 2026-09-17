@@ -17,6 +17,8 @@ struct LoginView: View {
     @State private var rememberedLoginWhenOpeningSheet = ""
     @State private var prefersManualLogin = false
     @State private var ignoreLoginEdits = true
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var didFinishFirstAppear = false
 
     private var canLogIn: Bool {
         contact.isValid && !password.isEmpty
@@ -218,7 +220,14 @@ struct LoginView: View {
                 scheduleFaceIDPrompt()
                 DispatchQueue.main.async {
                     ignoreLoginEdits = false
+                    didFinishFirstAppear = true
                 }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active, didFinishFirstAppear else { return }
+                guard !prefersManualLogin, !session.isAuthenticated else { return }
+                didAutoPromptFaceID = false
+                scheduleFaceIDPrompt()
             }
         }
         .tint(AppTheme.teal)
@@ -244,11 +253,16 @@ struct LoginView: View {
     }
 
     private func scheduleFaceIDPrompt() {
-        guard !didAutoPromptFaceID, !prefersManualLogin, session.shouldAutoPromptFaceID else { return }
+        guard !didAutoPromptFaceID, !prefersManualLogin else { return }
+        guard session.prefersFaceIDLogin, session.canOfferFaceID, !AppLaunchFlags.isUITesting else { return }
         didAutoPromptFaceID = true
+        let delay = session.autoPromptDelayRemaining > 0
+            ? session.autoPromptDelayRemaining
+            : 0.35
         Task {
-            try? await Task.sleep(for: .milliseconds(350))
+            try? await Task.sleep(for: .seconds(delay))
             guard !prefersManualLogin, !session.isAuthenticated else { return }
+            guard session.shouldAutoPromptFaceID else { return }
             errorMessage = await session.unlockWithFaceID()
         }
     }

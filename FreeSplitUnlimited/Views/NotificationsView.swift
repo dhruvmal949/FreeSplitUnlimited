@@ -12,7 +12,7 @@ struct NotificationsView: View {
 
     private var occasions: [Occasion] {
         var seen = Set<UUID>()
-        return allOccasions.filter { !$0.isDeleted && seen.insert($0.id).inserted }
+        return allOccasions.filter { $0.shouldAppearInLists && seen.insert($0.id).inserted }
     }
 
     private var events: [ActivityEvent] {

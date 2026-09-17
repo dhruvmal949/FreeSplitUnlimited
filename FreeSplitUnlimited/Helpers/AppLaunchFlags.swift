@@ -11,7 +11,11 @@ enum AppLaunchFlags {
     }
 
     static var isUnitTesting: Bool {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        let env = ProcessInfo.processInfo.environment
+        if env["XCTestConfigurationFilePath"] != nil { return true }
+        if env["XCTestBundlePath"] != nil { return true }
+        if env["XCTestSessionIdentifier"] != nil { return true }
+        return NSClassFromString("XCTestCase") != nil
     }
 
     static var isAutomatedTesting: Bool {
