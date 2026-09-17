@@ -9,22 +9,80 @@ import UniformTypeIdentifiers
 import UIKit
 
 struct ContentView: View {
+    @Query(sort: \Occasion.createdAt, order: .reverse) private var allOccasions: [Occasion]
+    @ObservedObject private var session = AuthSession.shared
     @State private var selectedTab = 1
+    @State private var navigationEpoch = UUID()
+    @State private var settingsGroupID: UUID?
 
     var body: some View {
-        NavigationStack {
-            tabRoot
+        ZStack {
+            NavigationStack {
+                tabRoot
+            }
+            .id("\(selectedTab)-\(navigationEpoch.uuidString)")
+            .animation(nil, value: navigationEpoch)
+
+            if let settingsOccasion {
+                GroupSettingsView(occasion: settingsOccasion, onClose: {
+                    settingsGroupID = nil
+                })
+                    .transition(.identity)
+                    .zIndex(1)
+            }
         }
-        .id(selectedTab)
-        .environment(\.popToHome, { selectedTab = 1 })
+        .animation(nil, value: settingsGroupID)
+        .environment(\.popToHome, {
+            jumpToHome()
+        })
         .tint(AppTheme.teal)
         .safeAreaInset(edge: .bottom) {
-            MainTabBar(selectedTab: selectedTab, onSelect: selectTab)
+            if settingsGroupID == nil {
+                MainTabBar(selectedTab: selectedTab, onSelect: selectTab)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .freeSplitJumpToHome)) { _ in
+            jumpToHome()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .freeSplitOpenGroupSettings)) { note in
+            settingsGroupID = note.object as? UUID
         }
         .onAppear {
             guard !AppLaunchFlags.isUITesting else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 SyncCoordinator.shared.startNearby()
+            }
+        }
+    }
+
+    private var settingsOccasion: Occasion? {
+        guard let settingsGroupID else { return nil }
+        return allOccasions.first {
+            $0.id == settingsGroupID
+                && OccasionAccess.isVisible(
+                    $0,
+                    as: AccountIdentity(
+                        accountID: session.accountID,
+                        email: session.email,
+                        phone: session.accountPhone,
+                        names: session.selfNames.filter { FriendPairing.isUsableName($0) }
+                    )
+                )
+        }
+    }
+
+    private func jumpToHome() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            selectedTab = 1
+            navigationEpoch = UUID()
+        }
+        DispatchQueue.main.async {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                settingsGroupID = nil
             }
         }
     }
@@ -95,14 +153,15 @@ private struct GroupsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Occasion.createdAt, order: .reverse)
     private var allOccasions: [Occasion]
+    @ObservedObject private var session = AuthSession.shared
     @State private var showingAddOccasion = false
-    @State private var showingJoinCode = false
     @State private var showingImporter = false
     @State private var statusMessage: StatusMessage?
     @State private var openedGroupID: OpenedGroup?
     @State private var pendingOpenGroupID: UUID?
     @State private var showingFilter = false
     @State private var groupFilter: GroupBalanceFilter = .none
+    @State private var hiddenGroupIDs = DeletedGroupsStore.ids()
 
     private struct OpenedGroup: Identifiable, Hashable {
         let id: UUID
@@ -116,8 +175,18 @@ private struct GroupsView: View {
 
     /// Filter in Swift — `#Predicate` on SwiftData can trap (`brk`) after schema changes.
     private var occasions: [Occasion] {
+        let identity = AccountIdentity(
+            accountID: session.accountID,
+            email: session.email,
+            phone: session.accountPhone,
+            names: session.selfNames.filter { FriendPairing.isUsableName($0) }
+        )
         var seen = Set<UUID>()
-        return allOccasions.filter { !$0.isDeleted && seen.insert($0.id).inserted }
+        return allOccasions.filter { occasion in
+            !hiddenGroupIDs.contains(occasion.id)
+                && OccasionAccess.isVisible(occasion, as: identity)
+                && seen.insert(occasion.id).inserted
+        }
     }
 
     /// One-to-one Friends splits stay off Home until a third person is added.
@@ -153,7 +222,7 @@ private struct GroupsView: View {
                             .foregroundStyle(.secondary)
                             .listRowBackground(Color.clear)
                     } else {
-                        ForEach(visibleOccasions, id: \.id) { occasion in
+                        ForEach(visibleOccasions.filter(\.shouldAppearInLists), id: \.id) { occasion in
                             NavigationLink {
                                 OccasionDetailView(occasion: occasion)
                             } label: {
@@ -161,7 +230,6 @@ private struct GroupsView: View {
                             }
                             .listRowBackground(Color.white.opacity(0.78))
                         }
-                        .onDelete(perform: deleteOccasions)
                     }
 
                     Section {
@@ -179,13 +247,6 @@ private struct GroupsView: View {
         .navigationTitle("Home")
         .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    showingJoinCode = true
-                } label: {
-                    Label("Join with Code", systemImage: "person.badge.plus")
-                }
-            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showingImporter = true
@@ -211,17 +272,21 @@ private struct GroupsView: View {
             Button("Cancel", role: .cancel) {}
         }
         .freeSplitBackground()
+        .onAppear {
+            hiddenGroupIDs = DeletedGroupsStore.ids()
+            DispatchQueue.main.async {
+                persistHiddenGroups()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .freeSplitDidHideGroups)) { _ in
+            hiddenGroupIDs = DeletedGroupsStore.ids()
+        }
         .navigationDestination(item: $openedGroupID) { token in
             if let occasion = occasions.first(where: { $0.id == token.id }) {
                 OccasionDetailView(occasion: occasion)
             } else {
                 NoneState(image: "person.3", message: "This group isn’t available.")
                     .homeBackButton()
-            }
-        }
-        .sheet(isPresented: $showingJoinCode) {
-            JoinGroupView { id in
-                openedGroupID = OpenedGroup(id: id)
             }
         }
         .sheet(isPresented: $showingAddOccasion, onDismiss: {
@@ -283,6 +348,14 @@ private struct GroupsView: View {
         showingAddOccasion = true
     }
 
+    private func persistHiddenGroups() {
+        let stale = allOccasions.filter { hiddenGroupIDs.contains($0.id) || !$0.shouldAppearInLists }
+        guard !stale.isEmpty else { return }
+        for occasion in stale {
+            modelContext.removeGroup(occasion)
+        }
+    }
+
     private func importSharedSplit(from url: URL) {
         do {
             let occasion = try SplitShare.importFile(at: url, into: modelContext)
@@ -330,17 +403,6 @@ private struct GroupsView: View {
 
             if groupOccasions.isEmpty {
                 Button {
-                    showingJoinCode = true
-                } label: {
-                    Text("Join with Code")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.bordered)
-                .tint(AppTheme.teal)
-
-                Button {
                     showingImporter = true
                 } label: {
                     Text("Import from File")
@@ -352,15 +414,6 @@ private struct GroupsView: View {
                 .tint(AppTheme.teal)
             }
         }
-    }
-
-    private func deleteOccasions(at offsets: IndexSet) {
-        for index in offsets {
-            let occasion = visibleOccasions[index]
-            occasion.isDeleted = true
-            occasion.touch()
-        }
-        modelContext.persist()
     }
 }
 
@@ -377,7 +430,7 @@ struct OccasionRowView: View {
             groupArtwork
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(occasion.name)
+                Text(occasion.displayName)
                     .font(.headline)
                     .foregroundStyle(.primary)
 

@@ -23,13 +23,13 @@ struct CreateGroupView: View {
     @State private var coverImageData: Data?
     @State private var showingFriendPicker = false
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
-    @State private var discardOnDismiss = false
-    @State private var skipDismissSave = false
-    @State private var savedGroupID: UUID?
+    @State private var inviteContacts: [PickedContact] = []
+    @State private var pendingCreatedID: UUID?
+    @State private var createdOccasion: Occasion?
 
     init(onCreated: @escaping (UUID) -> Void = { _ in }) {
         self.onCreated = onCreated
-        _friends = State(initialValue: [FriendDraft(contact: ContactDirectory.me())])
+        _friends = State(initialValue: [])
     }
 
     private var trimmedName: String {
@@ -37,7 +37,7 @@ struct CreateGroupView: View {
     }
 
     private var canCreate: Bool {
-        !trimmedName.isEmpty
+        true
     }
 
     var body: some View {
@@ -49,9 +49,9 @@ struct CreateGroupView: View {
                     peopleSection
 
                     Button {
-                        persistGroup(dismissAfter: true)
+                        createGroup()
                     } label: {
-                        Text("Done")
+                        Text("Create Group")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
@@ -71,29 +71,29 @@ struct CreateGroupView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        discardOnDismiss = true
-                        if let savedGroupID,
-                           let existing = (try? modelContext.fetch(FetchDescriptor<Occasion>()))?.first(where: { $0.id == savedGroupID && !$0.isDeleted }) {
-                            existing.isDeleted = true
-                            existing.touch()
-                            modelContext.persist()
-                        }
-                        dismiss()
-                    }
-                }
-            }
-            .onDisappear {
-                if !discardOnDismiss && !skipDismissSave && !showingFriendPicker {
-                    persistGroup(dismissAfter: false)
+                    Button("Cancel") { dismiss() }
                 }
             }
             .sheet(isPresented: $showingFriendPicker) {
                 FriendSearchPicker(
                     contactsAllowed: contactsAllowed,
                     savedFriends: KnownFriendsStore.previouslyUsedFriends(from: modelContext),
+                    existingPeople: visibleFriends.map {
+                        PickedContact(
+                            id: $0.id.uuidString,
+                            name: $0.trimmedName,
+                            email: $0.email,
+                            phone: $0.phone
+                        )
+                    },
                     onPick: { contacts in
                         add(contacts)
+                    },
+                    onRemoveExisting: { contact in
+                        friends.removeAll {
+                            $0.trimmedName.localizedCaseInsensitiveCompare(contact.name) == .orderedSame
+                                && FriendPairing.isUsableName($0.trimmedName)
+                        }
                     },
                     onContactsAccessGranted: {
                         contactsAllowed = true
@@ -105,6 +105,12 @@ struct CreateGroupView: View {
             }
         }
         .tint(AppTheme.teal)
+        .friendInvite(
+            contacts: $inviteContacts,
+            splitName: trimmedName.isEmpty ? "Untitled group" : trimmedName,
+            onSent: markInviteSent,
+            onFinished: finishCreateIfNeeded
+        )
     }
 
     private var identityCard: some View {
@@ -150,6 +156,10 @@ struct CreateGroupView: View {
                     .padding(.vertical, 10)
                     .background(Color.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
+                Text("You can leave this blank and name the group later.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 TextField("Short note (optional)", text: $note)
                     .font(.subheadline)
                     .padding(.horizontal, 12)
@@ -192,6 +202,10 @@ struct CreateGroupView: View {
         }
     }
 
+    private var visibleFriends: [FriendDraft] {
+        friends.filter { $0.isComplete && !$0.isSelf }
+    }
+
     private var peopleSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("People")
@@ -199,14 +213,20 @@ struct CreateGroupView: View {
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(friends.filter(\.isComplete)) { friend in
-                    HStack {
-                        Image(systemName: friend.trimmedName.localizedCaseInsensitiveCompare("Me") == .orderedSame
-                              ? "person.crop.circle.fill"
-                              : "person.crop.circle")
-                            .foregroundStyle(AppTheme.teal)
-                        Text(friend.trimmedName)
-                        Spacer()
+                ForEach(visibleFriends) { friend in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Image(systemName: "person.crop.circle")
+                                .foregroundStyle(AppTheme.teal)
+                            Text(friend.trimmedName)
+                            Spacer()
+                        }
+                        if !friend.email.isEmpty || !friend.phone.isEmpty {
+                            Text([friend.email, friend.phone].filter { !$0.isEmpty }.joined(separator: " · "))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 28)
+                        }
                     }
                     .padding(.vertical, 4)
                 }
@@ -238,16 +258,26 @@ struct CreateGroupView: View {
 
     private func add(_ contacts: [PickedContact]) {
         var next: [FriendDraft] = []
-        for contact in contacts {
+        for contact in contacts where !contact.isMe {
             let draft = FriendDraft(contact: contact)
+            guard !draft.isSelf else { continue }
             let alreadyAdded = next.contains {
                 $0.trimmedName.localizedCaseInsensitiveCompare(draft.trimmedName) == .orderedSame
             }
-            if !alreadyAdded {
+            let occupied = next.map {
+                PickedContact(id: $0.id.uuidString, name: $0.trimmedName, email: $0.email, phone: $0.phone)
+            }
+            let picked = PickedContact(
+                id: draft.id.uuidString,
+                name: draft.trimmedName,
+                email: draft.email,
+                phone: draft.phone
+            )
+            if !alreadyAdded, ContactUniqueness.duplicateMessage(for: picked, in: occupied) == nil {
                 next.append(draft)
             }
         }
-        for existing in friends where existing.isComplete {
+        for existing in visibleFriends {
             let alreadyAdded = next.contains {
                 $0.trimmedName.localizedCaseInsensitiveCompare(existing.trimmedName) == .orderedSame
             }
@@ -281,77 +311,68 @@ struct CreateGroupView: View {
         return (resized, resized.jpegData(compressionQuality: 0.72))
     }
 
-    private func persistGroup(dismissAfter: Bool) {
-        guard canCreate else {
-            if dismissAfter {
-                skipDismissSave = true
-                dismiss()
-            }
-            return
-        }
+    private func createGroup() {
+        guard canCreate else { return }
 
-        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        let groupType = (kind ?? .other).rawValue
-        let occasions = (try? modelContext.fetch(FetchDescriptor<Occasion>())) ?? []
+        let occasion = Occasion(
+            name: trimmedName,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines),
+            groupType: (kind ?? .other).rawValue
+        )
 
-        let occasion: Occasion
-        if let savedGroupID,
-           let existing = occasions.first(where: { $0.id == savedGroupID && !$0.isDeleted }) {
-            existing.name = trimmedName
-            existing.note = trimmedNote
-            existing.groupType = groupType
-            occasion = existing
-        } else {
-            let created = Occasion(
-                name: trimmedName,
-                note: trimmedNote,
-                groupType: groupType
+        var people = visibleFriends.map { draft -> Person in
+            let person = Person(
+                name: draft.trimmedName,
+                email: draft.email.trimmingCharacters(in: .whitespacesAndNewlines),
+                phone: draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
             )
-            JoinCode.assignIfNeeded(to: created, in: modelContext)
-            modelContext.insert(created)
-            occasion = created
+            person.setContact(email: draft.email, phone: draft.phone)
+            return person
+        }
+        if !people.contains(where: { $0.name.localizedCaseInsensitiveCompare("Me") == .orderedSame }) {
+            people.insert(Person(name: "Me"), at: 0)
         }
 
-        applyPeople(to: occasion)
-
+        occasion.members = people
+        occasion.assignCurrentOwner()
+        modelContext.insert(occasion)
+        for person in occasion.members {
+            person.setContact(email: person.email, phone: person.phone)
+        }
         GroupCoverStore.save(coverImageData, for: occasion.id)
-        occasion.touch()
         modelContext.persist()
-        savedGroupID = occasion.id
-
-        guard dismissAfter else { return }
-        skipDismissSave = true
-        dismiss()
-        onCreated(occasion.id)
+        createdOccasion = occasion
+        pendingCreatedID = occasion.id
+        let invitees = occasion.uniqueMembers.compactMap { person -> PickedContact? in
+            guard FriendPairing.isUsableName(person.name) else { return nil }
+            return PickedContact(
+                id: person.id.uuidString,
+                name: person.name,
+                email: person.email,
+                phone: person.phone,
+                personID: person.id,
+                didInvite: person.didInvite
+            )
+        }
+        if invitees.contains(where: { FriendInvite.needsInvite($0) }) {
+            inviteContacts = invitees
+        } else {
+            finishCreateIfNeeded()
+        }
     }
 
-    private func applyPeople(to occasion: Occasion) {
-        var drafts = friends.filter(\.isComplete)
-        if !drafts.contains(where: {
-            $0.trimmedName.localizedCaseInsensitiveCompare("Me") == .orderedSame
-        }) {
-            drafts.insert(FriendDraft(name: "Me"), at: 0)
-        }
+    private func finishCreateIfNeeded() {
+        guard let id = pendingCreatedID else { return }
+        pendingCreatedID = nil
+        createdOccasion = nil
+        dismiss()
+        onCreated(id)
+    }
 
-        for draft in drafts {
-            if let existing = occasion.uniqueMembers.first(where: {
-                $0.name.localizedCaseInsensitiveCompare(draft.trimmedName) == .orderedSame
-            }) {
-                if existing.email.isEmpty {
-                    existing.email = draft.email.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-                if existing.phone.isEmpty {
-                    existing.phone = draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-            } else {
-                let person = Person(
-                    name: draft.trimmedName,
-                    email: draft.email.trimmingCharacters(in: .whitespacesAndNewlines),
-                    phone: draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
-                )
-                person.occasion = occasion
-                modelContext.insert(person)
-            }
-        }
+    private func markInviteSent(_ id: UUID) {
+        guard let person = createdOccasion?.uniqueMembers.first(where: { $0.id == id }) else { return }
+        person.didInvite = true
+        createdOccasion?.touch()
+        modelContext.persist()
     }
 }

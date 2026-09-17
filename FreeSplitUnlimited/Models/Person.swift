@@ -20,6 +20,8 @@ final class Person {
     var expensesShared: [Expense] = []
     @Relationship(inverse: \ExpenseShare.person)
     var expenseShares: [ExpenseShare] = []
+    /// Invite SMS/email is sent once; the Notify toggle locks after a successful send.
+    var didInvite: Bool = false
 
     init(name: String, email: String = "", phone: String = "", id: UUID = UUID()) {
         self.id = id
@@ -29,5 +31,31 @@ final class Person {
         self.expensesPaid = []
         self.expensesShared = []
         self.expenseShares = []
+        self.didInvite = false
+    }
+
+    var hasContactInfo: Bool {
+        !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !phone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// SwiftData can drop `email`/`phone` when they are only set in `init` (they have defaults).
+    /// Assign them again after the person is in a model context, then remember the contact.
+    func setContact(email: String, phone: String) {
+        self.email = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.phone = phone.trimmingCharacters(in: .whitespacesAndNewlines)
+        KnownFriendsStore.remember([self])
+    }
+
+    var asPickedContact: PickedContact {
+        PickedContact(
+            id: id.uuidString,
+            name: name,
+            email: email,
+            phone: phone,
+            isMe: FriendPairing.isPlaceholderSelf(name),
+            personID: id,
+            didInvite: didInvite
+        )
     }
 }

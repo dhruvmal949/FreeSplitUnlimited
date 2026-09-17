@@ -8,6 +8,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject private var mesh = MeshSyncService.shared
+    @ObservedObject private var session = AuthSession.shared
     @Environment(\.openURL) private var openURL
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
 
@@ -16,19 +17,12 @@ struct SettingsView: View {
         case .authorized:
             return "Full Access"
         case .limited:
-            return "Limited Access"
+            return "Selected contacts"
         case .denied, .restricted:
             return "Off"
         default:
-            return "Not allowed"
+            return "Not asked yet"
         }
-    }
-
-    private var accountLabel: String {
-        if AuthSession.shared.isGuest { return "Guest" }
-        let name = AuthSession.shared.displayName
-        if !name.isEmpty { return name }
-        return AuthSession.shared.provider.title
     }
 
     var body: some View {
@@ -53,37 +47,40 @@ struct SettingsView: View {
                             openURL(url)
                         }
                     } label: {
-                        Label("Setting", systemImage: "gear")
+                        Label("Change in Settings", systemImage: "gear")
                     }
                 } header: {
                     Text("Contacts")
-                } footer: {
-                    Text("Allow Full Access or only selected contacts so you can add friends from your phone.")
                 }
 
                 Section("Account") {
-                    HStack {
-                        Text("Signed in as")
-                        Spacer()
-                        Text(accountLabel)
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("Sign-in method")
-                        Spacer()
-                        Text(AuthSession.shared.provider.title)
-                            .foregroundStyle(.secondary)
-                    }
-                    if !AuthSession.shared.isGuest, !AuthSession.shared.email.isEmpty {
+                    if session.isGuest {
                         HStack {
-                            Text("Email")
+                            Text("Username")
                             Spacer()
-                            Text(AuthSession.shared.email)
+                            Text("Guest")
                                 .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        if !session.displayName.isEmpty,
+                           session.displayName.localizedCaseInsensitiveCompare(session.signedInHandle) != .orderedSame {
+                            HStack {
+                                Text("Name")
+                                Spacer()
+                                Text(session.displayName)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        HStack {
+                            Text("Username")
+                            Spacer()
+                            Text(session.signedInHandle)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.trailing)
                         }
                     }
                     Button("Sign Out", role: .destructive) {
-                        AuthSession.shared.signOut()
+                        session.signOut()
                     }
                 }
 

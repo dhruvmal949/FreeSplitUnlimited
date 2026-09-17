@@ -2,8 +2,8 @@
 //  KnownFriendsStore.swift
 //  FreeSplitUnlimited
 //
-//  Remembers friend names added to splits so they can still be picked
-//  when the user has denied Contacts access.
+//  Remembers friends added to splits so they can be picked again later,
+//  including after they are removed from a split.
 //
 
 import Foundation
@@ -21,14 +21,48 @@ struct SavedFriend: Codable, Hashable, Identifiable {
 }
 
 enum KnownFriendsStore {
-    private static let key = "freeSplit.knownFriends"
+    private static var key: String {
+        AppLaunchFlags.isAutomatedTesting
+            ? "freeSplit.knownFriends.testing"
+            : "freeSplit.knownFriends"
+    }
+
+    private static var fileName: String {
+        AppLaunchFlags.isAutomatedTesting ? "knownFriends.testing.json" : "knownFriends.json"
+    }
+
+    private static var fileURL: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("FreeSplitUnlimited", isDirectory: true)
+            .appendingPathComponent(fileName)
+    }
 
     static func all() -> [SavedFriend] {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let friends = try? JSONDecoder().decode([SavedFriend].self, from: data) else {
-            return []
+        if let data = UserDefaults.standard.data(forKey: key),
+           let friends = try? JSONDecoder().decode([SavedFriend].self, from: data) {
+            return friends
         }
-        return friends
+        if let fileURL,
+           let data = try? Data(contentsOf: fileURL),
+           let friends = try? JSONDecoder().decode([SavedFriend].self, from: data) {
+            return friends
+        }
+        return []
+    }
+
+    static func resetForTesting() {
+        UserDefaults.standard.removeObject(forKey: key)
+        if let fileURL {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
+    static func contact(named raw: String) -> PickedContact? {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard FriendPairing.isUsableName(name) else { return nil }
+        return all().first {
+            $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame
+        }?.asPickedContact
     }
 
     static func remember(from context: ModelContext) {
@@ -37,43 +71,67 @@ enum KnownFriendsStore {
     }
 
     static func remember(_ people: [Person]) {
+        remember(
+            people.map {
+                SavedFriend(name: $0.name, email: $0.email, phone: $0.phone)
+            }
+        )
+    }
+
+    static func remember(_ contacts: [PickedContact]) {
+        remember(
+            contacts.map { contact in
+                let resolved = contact.resolvedContact() ?? contact
+                return SavedFriend(name: resolved.name, email: resolved.email, phone: resolved.phone)
+            }
+        )
+    }
+
+    static func remember(_ incoming: [SavedFriend]) {
         var byKey: [String: SavedFriend] = [:]
         for friend in all() {
             let key = friend.id
             guard !key.isEmpty else { continue }
             byKey[key] = friend
         }
-        for person in people {
-            let name = person.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty else { continue }
+        for raw in incoming {
+            let name = raw.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard FriendPairing.isUsableName(name) else { continue }
             let key = name.lowercased()
             var friend = byKey[key] ?? SavedFriend(name: name, email: "", phone: "")
             friend.name = name
-            let email = person.email.trimmingCharacters(in: .whitespacesAndNewlines)
-            let phone = person.phone.trimmingCharacters(in: .whitespacesAndNewlines)
-            if friend.email.isEmpty { friend.email = email }
-            if friend.phone.isEmpty { friend.phone = phone }
+            let email = raw.email.trimmingCharacters(in: .whitespacesAndNewlines)
+            let phone = raw.phone.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !email.isEmpty { friend.email = email }
+            if !phone.isEmpty { friend.phone = phone }
             byKey[key] = friend
         }
-        let merged = byKey.values.sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
-        if let data = try? JSONEncoder().encode(merged) {
-            UserDefaults.standard.set(data, forKey: key)
-        }
+        persist(
+            byKey.values.sorted {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+        )
     }
 
-    /// Unique previously used friends: cache plus people still in local splits.
+    private static func persist(_ friends: [SavedFriend]) {
+        guard let data = try? JSONEncoder().encode(friends) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+        guard let fileURL else { return }
+        try? FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? data.write(to: fileURL, options: .atomic)
+    }
+
+    /// Unique previously used friends. Removing someone from a split does not forget them.
     static func previouslyUsedFriends(from context: ModelContext) -> [PickedContact] {
         remember(from: context)
-        var byKey: [String: PickedContact] = [:]
-        for friend in all() {
-            let name = friend.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty else { continue }
-            byKey[name.lowercased()] = friend.asPickedContact
-        }
-        return byKey.values.sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
+        return all()
+            .filter { FriendPairing.isUsableName($0.name) }
+            .map(\.asPickedContact)
+            .sorted {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
     }
 }

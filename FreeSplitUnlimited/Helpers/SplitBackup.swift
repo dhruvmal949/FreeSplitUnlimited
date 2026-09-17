@@ -26,11 +26,51 @@ struct BackupOccasion: Codable {
     var updatedAt: Date = .now
     var isDeleted: Bool = false
     var groupType: String = GroupKind.other.rawValue
-    var joinCode: String = ""
-    /// The creating phone’s display name, so a nearby 1:1 can pair without a hello message.
-    var ownerName: String = ""
     var members: [BackupPerson]
     var expenses: [BackupExpense]
+    var ownerAccountID: UUID?
+    var grantedAccountIDs: [UUID] = []
+
+    init(
+        id: UUID,
+        name: String,
+        note: String,
+        createdAt: Date,
+        updatedAt: Date = .now,
+        isDeleted: Bool = false,
+        groupType: String = GroupKind.other.rawValue,
+        members: [BackupPerson],
+        expenses: [BackupExpense],
+        ownerAccountID: UUID? = nil,
+        grantedAccountIDs: [UUID] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.note = note
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.isDeleted = isDeleted
+        self.groupType = groupType
+        self.members = members
+        self.expenses = expenses
+        self.ownerAccountID = ownerAccountID
+        self.grantedAccountIDs = grantedAccountIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        note = try container.decode(String.self, forKey: .note)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .now
+        isDeleted = try container.decodeIfPresent(Bool.self, forKey: .isDeleted) ?? false
+        groupType = try container.decodeIfPresent(String.self, forKey: .groupType) ?? GroupKind.other.rawValue
+        members = try container.decode([BackupPerson].self, forKey: .members)
+        expenses = try container.decode([BackupExpense].self, forKey: .expenses)
+        ownerAccountID = try container.decodeIfPresent(UUID.self, forKey: .ownerAccountID)
+        grantedAccountIDs = try container.decodeIfPresent([UUID].self, forKey: .grantedAccountIDs) ?? []
+    }
 }
 
 struct BackupPerson: Codable {
@@ -199,8 +239,6 @@ enum SplitBackup {
             updatedAt: occasion.updatedAt,
             isDeleted: occasion.isDeleted,
             groupType: occasion.groupType,
-            joinCode: occasion.joinCode,
-            ownerName: "",
             members: occasion.uniqueMembers.map {
                 BackupPerson(id: $0.id, name: $0.name, email: $0.email, phone: $0.phone)
             },
@@ -221,7 +259,9 @@ enum SplitBackup {
                         )
                     }
                 )
-            }
+            },
+            ownerAccountID: occasion.ownerAccountID,
+            grantedAccountIDs: occasion.grantedAccountIDs
         )
     }
 
@@ -235,30 +275,20 @@ enum SplitBackup {
     /// Pass `force: true` for an explicit user import (AirDrop / Files) so the opened
     /// file always appears, even if a deleted or newer local copy exists.
     @discardableResult
-    static func upsert(
-        _ backup: BackupOccasion,
-        into context: ModelContext,
-        force: Bool = false,
-        peerName: String? = nil,
-        selfNames: [String] = ["Me"]
-    ) throws -> Occasion? {
-        let localOccasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
-        var incoming = backup
-        let resolvedPeer = [peerName, backup.ownerName]
-            .compactMap { $0 }
-            .first { FriendPairing.isUsableName($0) }
-        if backup.groupType == SplitKind.oneToOne, let resolvedPeer {
-            incoming = FriendPairing.prepareIncoming(
-                backup,
-                peerName: resolvedPeer,
-                selfNames: selfNames,
-                localOccasions: localOccasions
-            )
+    static func upsert(_ backup: BackupOccasion, into context: ModelContext, force: Bool = false) throws -> Occasion? {
+        let existing = ((try? context.fetch(FetchDescriptor<Occasion>())) ?? [])
+            .first { $0.id == backup.id }
+
+        if DeletedGroupsStore.contains(backup.id), !force {
+            if let existing {
+                existing.isDeleted = true
+                existing.touch()
+                try context.save()
+            }
+            return existing
         }
 
-        let existing = localOccasions.first { $0.id == incoming.id }
-
-        if let existing, !force, existing.updatedAt >= incoming.updatedAt {
+        if let existing, !force, existing.updatedAt >= backup.updatedAt {
             return nil
         }
 
@@ -266,19 +296,17 @@ enum SplitBackup {
         if let existing {
             // Update in place. Deleting a live SwiftData object while @Query
             // is rendering it is a common `brk` (invalidated model / ForEach).
-            existing.name = incoming.name
-            existing.note = incoming.note
-            existing.createdAt = incoming.createdAt
-            existing.updatedAt = incoming.updatedAt
-            existing.isDeleted = incoming.isDeleted
-            existing.groupType = incoming.groupType
-            if !incoming.joinCode.isEmpty {
-                existing.joinCode = incoming.joinCode
-            }
-            replaceChildren(of: existing, with: incoming, into: context)
+            existing.name = backup.name
+            existing.note = backup.note
+            existing.createdAt = backup.createdAt
+            existing.updatedAt = backup.updatedAt
+            existing.isDeleted = backup.isDeleted
+            existing.groupType = backup.groupType
+            applyAccess(from: backup, to: existing)
+            replaceChildren(of: existing, with: backup, into: context)
             occasion = existing
         } else {
-            occasion = importOccasion(incoming, into: context)
+            occasion = importOccasion(backup, into: context)
         }
 
         try context.save()
@@ -298,10 +326,21 @@ enum SplitBackup {
         )
         occasion.isDeleted = backup.isDeleted
         occasion.groupType = backup.groupType
-        occasion.joinCode = backup.joinCode
+        applyAccess(from: backup, to: occasion)
         populate(occasion, from: backup, into: context)
         context.insert(occasion)
         return occasion
+    }
+
+    private static func applyAccess(from backup: BackupOccasion, to occasion: Occasion) {
+        if occasion.ownerAccountID == nil {
+            occasion.ownerAccountID = backup.ownerAccountID
+        }
+        var granted = Set(occasion.grantedAccountIDs)
+        for id in backup.grantedAccountIDs {
+            granted.insert(id)
+        }
+        occasion.grantedAccountIDs = Array(granted)
     }
 
     private static func replaceChildren(of occasion: Occasion, with backup: BackupOccasion, into context: ModelContext) {
@@ -338,6 +377,7 @@ enum SplitBackup {
                 )
                 person.occasion = occasion
                 context.insert(person)
+                person.setContact(email: backup.email, phone: backup.phone)
                 peopleByID[backup.id] = person
             }
         }
@@ -435,6 +475,7 @@ enum SplitBackup {
             person.occasion = occasion
             peopleByID[member.id] = person
             context.insert(person)
+            person.setContact(email: member.email, phone: member.phone)
         }
 
         var seenExpenseIDs = Set<UUID>()

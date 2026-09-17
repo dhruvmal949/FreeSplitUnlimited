@@ -20,6 +20,10 @@ struct FriendDraft: Identifiable {
         !trimmedName.isEmpty
     }
 
+    var isSelf: Bool {
+        FriendPairing.isPlaceholderSelf(trimmedName)
+    }
+
     init(name: String = "", email: String = "", phone: String = "") {
         self.name = name
         self.email = email
@@ -42,20 +46,9 @@ struct AddOccasionView: View {
     @State private var friends: [FriendDraft]
     @State private var showingFriendPicker = false
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
-    @State private var discardOnDismiss = false
-    @State private var skipDismissSave = false
-    @State private var savedOccasionID: UUID?
 
     init(initialFriends: [FriendDraft] = []) {
-        let me = FriendDraft(contact: ContactDirectory.me())
-        var drafts = initialFriends.filter(\.isComplete)
-        if drafts.isEmpty {
-            drafts = [me]
-        } else if !drafts.contains(where: {
-            $0.trimmedName.localizedCaseInsensitiveCompare(me.trimmedName) == .orderedSame
-        }) {
-            drafts.insert(me, at: 0)
-        }
+        var drafts = initialFriends.filter { $0.isComplete && !$0.isSelf }
         while drafts.count < 2 {
             drafts.append(FriendDraft())
         }
@@ -108,7 +101,7 @@ struct AddOccasionView: View {
 
                 Section {
                     Button {
-                        save(dismissAfter: true)
+                        save()
                     } label: {
                         Text("Create Split")
                             .font(.headline)
@@ -128,21 +121,7 @@ struct AddOccasionView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        discardOnDismiss = true
-                        if let savedOccasionID,
-                           let existing = (try? modelContext.fetch(FetchDescriptor<Occasion>()))?.first(where: { $0.id == savedOccasionID && !$0.isDeleted }) {
-                            existing.isDeleted = true
-                            existing.touch()
-                            modelContext.persist()
-                        }
-                        dismiss()
-                    }
-                }
-            }
-            .onDisappear {
-                if !discardOnDismiss && !skipDismissSave && !showingFriendPicker {
-                    save(dismissAfter: false)
+                    Button("Cancel") { dismiss() }
                 }
             }
             .sheet(isPresented: $showingFriendPicker) {
@@ -173,8 +152,9 @@ struct AddOccasionView: View {
 
     private func add(_ contacts: [PickedContact]) {
         var next: [FriendDraft] = []
-        for contact in contacts {
+        for contact in contacts where !contact.isMe {
             let draft = FriendDraft(contact: contact)
+            guard !draft.isSelf else { continue }
             let alreadyAdded = next.contains {
                 $0.trimmedName.localizedCaseInsensitiveCompare(draft.trimmedName) == .orderedSame
             }
@@ -196,44 +176,34 @@ struct AddOccasionView: View {
         friends = next
     }
 
-    private func save(dismissAfter: Bool = true) {
-        guard canSave else {
-            if dismissAfter { dismiss() }
-            return
-        }
-
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
-        let people = friends
-            .filter(\.isComplete)
-            .map {
-                Person(
-                    name: $0.trimmedName,
-                    email: $0.email.trimmingCharacters(in: .whitespacesAndNewlines),
-                    phone: $0.phone.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func save() {
+        let occasion = Occasion(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        var people = friends
+            .filter { $0.isComplete && !$0.isSelf }
+            .map { draft -> Person in
+                let person = Person(
+                    name: draft.trimmedName,
+                    email: draft.email.trimmingCharacters(in: .whitespacesAndNewlines),
+                    phone: draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
+                person.setContact(email: draft.email, phone: draft.phone)
+                return person
             }
+        if !people.contains(where: { FriendPairing.isPlaceholderSelf($0.name) }) {
+            people.insert(Person(name: "Me"), at: 0)
+        }
 
-        if let savedOccasionID,
-           let existing = (try? modelContext.fetch(FetchDescriptor<Occasion>()))?.first(where: { $0.id == savedOccasionID && !$0.isDeleted }) {
-            existing.name = trimmedName
-            existing.note = trimmedNote
-            existing.touch()
-            modelContext.persist()
-        } else {
-            let occasion = Occasion(
-                name: trimmedName,
-                note: trimmedNote
-            )
-            occasion.members = people
-            modelContext.insert(occasion)
-            modelContext.persist()
-            savedOccasionID = occasion.id
+        occasion.members = people
+        occasion.assignCurrentOwner()
+        modelContext.insert(occasion)
+        for person in occasion.members {
+            person.setContact(email: person.email, phone: person.phone)
         }
-        if dismissAfter {
-            skipDismissSave = true
-            dismiss()
-        }
+        modelContext.persist()
+        dismiss()
     }
 }
 

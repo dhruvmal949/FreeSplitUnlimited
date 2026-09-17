@@ -19,9 +19,10 @@ final class Occasion {
     var isDeleted: Bool = false
     /// Stored as a string so older SwiftData stores can load without trapping.
     var groupType: String = GroupKind.other.rawValue
-    var coverImageData: Data? = nil
-    /// Short code like TRIP-4K so a friend can join without AirDrop.
-    var joinCode: String = ""
+    /// Account that created this group. Nil on older stores until claimed or stamped.
+    var ownerAccountID: UUID? = nil
+    /// Comma-separated account UUIDs that opened a share link or were granted this group.
+    var grantedAccountIDsRaw: String = ""
     @Relationship(deleteRule: .cascade, inverse: \Person.occasion)
     var members: [Person] = []
     @Relationship(deleteRule: .cascade, inverse: \Expense.occasion)
@@ -33,10 +34,7 @@ final class Occasion {
         createdAt: Date = .now,
         updatedAt: Date? = nil,
         id: UUID = UUID(),
-
-        groupType: String = GroupKind.other.rawValue,
-        coverImageData: Data? = nil,
-        joinCode: String = ""
+        groupType: String = GroupKind.other.rawValue
     ) {
         self.id = id
         self.name = name
@@ -45,10 +43,46 @@ final class Occasion {
         self.updatedAt = updatedAt ?? createdAt
         self.isDeleted = false
         self.groupType = groupType
-        self.coverImageData = coverImageData
-        self.joinCode = joinCode
+        self.ownerAccountID = nil
+        self.grantedAccountIDsRaw = ""
         self.members = []
         self.expenses = []
+    }
+
+    var grantedAccountIDs: [UUID] {
+        get {
+            grantedAccountIDsRaw
+                .split(separator: ",")
+                .compactMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+        set {
+            var seen = Set<UUID>()
+            grantedAccountIDsRaw = newValue
+                .filter { seen.insert($0).inserted }
+                .map(\.uuidString)
+                .joined(separator: ",")
+        }
+    }
+
+    func grantAccess(to accountID: UUID) {
+        var ids = grantedAccountIDs
+        guard !ids.contains(accountID) else { return }
+        ids.append(accountID)
+        grantedAccountIDs = ids
+    }
+
+    @MainActor
+    func assignCurrentOwner() {
+        guard let accountID = AuthSession.shared.accountID else { return }
+        if ownerAccountID == nil {
+            ownerAccountID = accountID
+        }
+        grantAccess(to: accountID)
+    }
+
+    var displayName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Untitled group" : trimmed
     }
 
     var kind: GroupKind {
@@ -65,9 +99,21 @@ final class Occasion {
         !isOneToOne || uniqueMembers.count > 2
     }
 
+    /// Hidden after the user deletes the group, even if a copy is restored locally.
+    var shouldAppearInLists: Bool {
+        !isDeleted && !DeletedGroupsStore.contains(id)
+    }
+
     /// Marks this split as changed so sync (mesh + cloud) knows to propagate it.
     func touch() {
         updatedAt = .now
+    }
+
+    /// Soft-delete so Home hides the group and nearby phones receive the removal.
+    func markDeleted() {
+        isDeleted = true
+        DeletedGroupsStore.remember(id)
+        touch()
     }
 
     /// When a one-to-one split grows past two people, save it as a group.

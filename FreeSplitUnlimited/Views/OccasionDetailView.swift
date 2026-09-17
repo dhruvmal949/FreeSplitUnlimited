@@ -14,17 +14,18 @@ struct OccasionDetailView: View {
 
     @State private var showingAddExpense = false
     @State private var showingAddMember = false
-    @State private var showingSettings = false
-    @State private var editingFriendID: UUID?
     @State private var editingExpenseID: UUID?
     @State private var selectedTab = 0
     @State private var sharePayload: ActivitySharePayload?
     @State private var shareAlert: String?
-    @State private var remindPayload: FriendRemindPayload?
-    @State private var payRequest: PayFriendRequest?
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
-    @State private var wasUnsettled = false
-    @State private var confettiStartedAt: Date?
+    @State private var isEditingName = false
+    @State private var draftName = ""
+    @State private var showingRenameGroup = false
+    @State private var inviteContacts: [PickedContact] = []
+    @State private var pendingInviteContacts: [PickedContact] = []
+    @State private var personToRemove: Person?
+    @FocusState private var nameFieldFocused: Bool
 
     private var sortedExpenses: [Expense] {
         var seen = Set<UUID>()
@@ -43,33 +44,6 @@ struct OccasionDetailView: View {
 
     private var isAlone: Bool {
         occasion.uniqueMembers.count < 2
-    }
-
-    private var myNames: [String] {
-        AuthSession.shared.selfNames
-    }
-
-    private func isMe(_ name: String) -> Bool {
-        myNames.contains { $0.localizedCaseInsensitiveCompare(name) == .orderedSame }
-    }
-
-    private var canCelebrate: Bool {
-        occasion.uniqueMembers.count >= 2 && !occasion.expenses.isEmpty
-    }
-
-    private var settleWatch: String {
-        "\(settlements.isEmpty)-\(occasion.expenses.count)-\(occasion.updatedAt.timeIntervalSinceReferenceDate)"
-    }
-
-    private func celebrateIfNewlySettled() {
-        let nowSettled = canCelebrate && settlements.isEmpty
-        if wasUnsettled && nowSettled {
-            DispatchQueue.main.async {
-                confettiStartedAt = .now
-                selectedTab = 1
-            }
-        }
-        wasUnsettled = canCelebrate && !settlements.isEmpty
     }
 
     var body: some View {
@@ -96,23 +70,11 @@ struct OccasionDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(.systemBackground))
-        .overlay {
-            if confettiStartedAt != nil {
-                ConfettiCannon()
-                    .id(confettiStartedAt)
-            }
-        }
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
         .toolbarBackground(.hidden, for: .navigationBar)
         .sheet(item: $sharePayload) { payload in
             ActivityShareSheet(payload: payload)
-        }
-        .sheet(item: $remindPayload) { payload in
-            FriendRemindSheet(payload: payload)
-        }
-        .sheet(item: $payRequest) { request in
-            PayFriendSheet(request: request, occasions: [occasion])
         }
         .alert("Couldn't Share", isPresented: Binding(
             get: { shareAlert != nil },
@@ -141,20 +103,6 @@ struct OccasionDetailView: View {
             .padding(.bottom, 8)
         }
         .avoidsMainTabBar()
-        .onAppear {
-            let before = occasion.joinCode
-            JoinCode.assignIfNeeded(to: occasion, in: modelContext)
-            let assigned = occasion.joinCode != before
-            wasUnsettled = canCelebrate && !settlements.isEmpty
-            if assigned {
-                DispatchQueue.main.async {
-                    modelContext.persist()
-                }
-            }
-        }
-        .onChange(of: settleWatch) { _, _ in
-            celebrateIfNewlySettled()
-        }
         .sheet(isPresented: $showingAddExpense) {
             AddExpenseView(occasion: occasion)
         }
@@ -167,30 +115,69 @@ struct OccasionDetailView: View {
                 AddExpenseView(occasion: occasion, expenseToEdit: expense)
             }
         }
-        .sheet(isPresented: $showingAddMember) {
+        .sheet(isPresented: $showingAddMember, onDismiss: {
+            if showingRenameGroup { return }
+            presentPendingInvite()
+        }) {
             FriendSearchPicker(
                 contactsAllowed: contactsAllowed,
                 savedFriends: KnownFriendsStore.previouslyUsedFriends(from: modelContext),
+                existingPeople: occasion.uniqueMembers
+                    .filter { FriendPairing.isUsableName($0.name) }
+                    .map(\.asPickedContact),
                 onPick: { contacts in
                     addMembers(contacts)
+                },
+                onRemoveExisting: { contact in
+                    removeExistingMember(contact)
                 },
                 onContactsAccessGranted: {
                     contactsAllowed = true
                 }
             )
         }
-        .sheet(isPresented: Binding(
-            get: { editingFriendID != nil },
-            set: { if !$0 { editingFriendID = nil } }
-        )) {
-            if let editingFriendID,
-               let person = occasion.uniqueMembers.first(where: { $0.id == editingFriendID }) {
-                EditFriendView(occasion: occasion, person: person)
+        .friendInvite(
+            contacts: $inviteContacts,
+            splitName: occasion.displayName,
+            onSent: markInviteSent
+        )
+        .alert("Name this group", isPresented: $showingRenameGroup) {
+            TextField("Group name", text: $draftName)
+            Button("Save") {
+                saveEditedName()
+                presentPendingInvite()
             }
+            Button("Later", role: .cancel) {
+                presentPendingInvite()
+            }
+        } message: {
+            Text("You can name this group now, or tap the title anytime to rename it.")
         }
-        .sheet(isPresented: $showingSettings) {
-            GroupSettingsView(occasion: occasion) {
-                dismiss()
+        .confirmationDialog(
+            "Remove \(personToRemove?.name ?? "this person")?",
+            isPresented: Binding(
+                get: { personToRemove != nil },
+                set: { if !$0 { personToRemove = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let personToRemove {
+                    modelContext.delete(personToRemove)
+                    occasion.touch()
+                    modelContext.persist()
+                }
+                personToRemove = nil
+            }
+            Button("Cancel", role: .cancel) {
+                personToRemove = nil
+            }
+        } message: {
+            Text("They will be removed from this split.")
+        }
+        .onChange(of: nameFieldFocused) { _, focused in
+            if !focused, isEditingName {
+                saveEditedName()
             }
         }
     }
@@ -209,14 +196,37 @@ struct OccasionDetailView: View {
                     shareSplit()
                 }
                 headerCircleButton(systemImage: "gearshape.fill", label: "Group settings") {
-                    showingSettings = true
+                    NotificationCenter.default.post(name: .freeSplitOpenGroupSettings, object: occasion.id)
                 }
             }
 
-            Text(occasion.name)
-                .font(.system(.largeTitle, design: .rounded, weight: .bold))
-                .foregroundStyle(.white)
-                .lineLimit(2)
+            if isEditingName {
+                TextField("Group name", text: $draftName)
+                    .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                    .foregroundStyle(.white)
+                    .tint(.white)
+                    .focused($nameFieldFocused)
+                    .submitLabel(.done)
+                    .onSubmit { saveEditedName() }
+                    .accessibilityIdentifier("groupNameTitleField")
+            } else {
+                Button {
+                    beginEditingName()
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(occasion.displayName)
+                            .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                            .foregroundStyle(.white)
+                            .lineLimit(2)
+                        Image(systemName: "pencil")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Edit group name")
+                .accessibilityIdentifier("editGroupName")
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
@@ -304,22 +314,6 @@ struct OccasionDetailView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(AppTheme.teal)
 
-                if !JoinCode.normalize(occasion.joinCode).isEmpty {
-                    VStack(spacing: 6) {
-                        Text("Join code")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(occasion.joinCode)
-                            .font(.title2.weight(.bold).monospaced())
-                            .foregroundStyle(AppTheme.deepTeal)
-                        Text("A friend types this in Join with Code. Keep both phones nearby.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding(.top, 4)
-                }
-
                 Button {
                     shareSplit()
                 } label: {
@@ -395,58 +389,42 @@ struct OccasionDetailView: View {
             Section("Who is owed") {
                 ForEach(balances) { balance in
                     HStack {
-                        Text(balance.person.name)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(balance.person.name)
+                            if balance.person.hasContactInfo {
+                                Text([balance.person.email, balance.person.phone].filter { !$0.isEmpty }.joined(separator: " · "))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                         Spacer()
                         Text(balanceLabel(for: balance.net))
                             .foregroundStyle(balanceColor(for: balance.net))
                             .fontWeight(.semibold)
                     }
                     .listRowBackground(Color.white.opacity(0.78))
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        if FriendPairing.isUsableName(balance.person.name) {
+                            Button("Delete", role: .destructive) {
+                                personToRemove = balance.person
+                            }
+                        }
+                    }
                 }
             }
 
             Section {
                 if settlements.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Everyone is settled up.")
-                            .font(.headline)
-                            .foregroundStyle(AppTheme.deepTeal)
-                        Text("No one owes anyone in this group.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .listRowBackground(Color.white.opacity(0.78))
+                    Text("Everyone is settled up.")
+                        .foregroundStyle(.secondary)
+                        .listRowBackground(Color.white.opacity(0.78))
                 } else {
                     ForEach(settlements) { settlement in
-                        HStack(alignment: .center) {
+                        HStack(alignment: .firstTextBaseline) {
                             Text("\(settlement.from.name) → \(settlement.to.name)")
                             Spacer()
-                            VStack(alignment: .trailing, spacing: 6) {
-                                Text(CurrencyFormat.string(from: settlement.amount))
-                                    .fontWeight(.semibold)
-                                if isMe(settlement.to.name), !isMe(settlement.from.name) {
-                                    Button("Remind") {
-                                        remindPayload = FriendReminder.payload(
-                                            name: settlement.from.name,
-                                            amount: settlement.amount,
-                                            occasions: [occasion],
-                                            myNames: myNames
-                                        )
-                                    }
-                                    .font(.caption.weight(.semibold))
-                                } else if isMe(settlement.from.name), !isMe(settlement.to.name) {
-                                    Button("Pay") {
-                                        payRequest = PaymentTransfer.request(
-                                            payeeName: settlement.to.name,
-                                            amount: settlement.amount,
-                                            occasions: [occasion],
-                                            note: "Free Split · \(occasion.name)",
-                                            legs: [PaymentLeg(occasionID: occasion.id, amount: settlement.amount)]
-                                        )
-                                    }
-                                    .font(.caption.weight(.semibold))
-                                }
-                            }
+                            Text(CurrencyFormat.string(from: settlement.amount))
+                                .fontWeight(.semibold)
                         }
                         .listRowBackground(Color.white.opacity(0.78))
                     }
@@ -454,7 +432,7 @@ struct OccasionDetailView: View {
             } header: {
                 Text("Settle up")
             } footer: {
-                Text("Suggested payments so everyone is even. Pay opens Venmo, Cash App, PayPal, or Messages, then tap I paid.")
+                Text("Suggested payments so everyone is even.")
             }
         }
         .freeSplitListStyle()
@@ -472,6 +450,13 @@ struct OccasionDetailView: View {
                             .fontWeight(.semibold)
                     }
                     .listRowBackground(Color.white.opacity(0.78))
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        if FriendPairing.isUsableName(balance.person.name) {
+                            Button("Delete", role: .destructive) {
+                                personToRemove = balance.person
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -505,21 +490,78 @@ struct OccasionDetailView: View {
 
     private func addMembers(_ contacts: [PickedContact]) {
         let existing = Set(occasion.uniqueMembers.map { $0.name.lowercased() })
-        var added = false
+        var addedContacts: [PickedContact] = []
+        let wasOneToOne = occasion.isOneToOne
         for contact in contacts where !contact.isMe {
             let name = contact.name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty, !existing.contains(name.lowercased()) else { continue }
-            let person = Person(name: name, email: contact.email, phone: contact.phone)
+            let occupied = occasion.uniqueMembers.map(\.asPickedContact) + addedContacts
+            if ContactUniqueness.duplicateMessage(for: contact, in: occupied) != nil {
+                continue
+            }
+            let resolved = contact.resolvedContact() ?? contact
+            let person = Person(name: name, email: resolved.email, phone: resolved.phone)
             person.occasion = occasion
             modelContext.insert(person)
+            person.setContact(email: resolved.email, phone: resolved.phone)
             if !occasion.members.contains(where: { $0.id == person.id }) {
                 occasion.members.append(person)
             }
-            added = true
+            addedContacts.append(person.asPickedContact)
         }
-        guard added else { return }
+        guard !addedContacts.isEmpty else { return }
         occasion.touch()
         occasion.promoteToGroupIfNeeded()
+        modelContext.persist()
+        pendingInviteContacts = occasion.uniqueMembers
+            .map(\.asPickedContact)
+            .filter { FriendInvite.needsInvite($0) }
+        if wasOneToOne, !occasion.isOneToOne {
+            draftName = occasion.name
+            showingRenameGroup = true
+        }
+    }
+
+    private func presentPendingInvite() {
+        let contacts = pendingInviteContacts
+        pendingInviteContacts = []
+        guard !contacts.isEmpty else { return }
+        inviteContacts = contacts
+    }
+
+    private func beginEditingName() {
+        draftName = occasion.name
+        isEditingName = true
+        nameFieldFocused = true
+    }
+
+    private func saveEditedName() {
+        let trimmed = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if occasion.name != trimmed {
+            occasion.name = trimmed
+            occasion.touch()
+            modelContext.persist()
+        }
+        isEditingName = false
+        nameFieldFocused = false
+    }
+
+    private func markInviteSent(_ id: UUID) {
+        guard let person = occasion.uniqueMembers.first(where: { $0.id == id }) else { return }
+        person.didInvite = true
+        occasion.touch()
+        modelContext.persist()
+    }
+
+    private func removeExistingMember(_ contact: PickedContact) {
+        let target = occasion.uniqueMembers.first { person in
+            if let id = contact.personID { return person.id == id }
+            return person.name.localizedCaseInsensitiveCompare(contact.name) == .orderedSame
+                && FriendPairing.isUsableName(person.name)
+        }
+        guard let target else { return }
+        modelContext.delete(target)
+        occasion.touch()
         modelContext.persist()
     }
 
@@ -552,14 +594,6 @@ struct OccasionDetailView: View {
         }
         occasion.touch()
         modelContext.persist()
-    }
-
-    private var joinInviteText: String {
-        let code = JoinCode.normalize(occasion.joinCode)
-        if code.isEmpty {
-            return "Join my Free Split group “\(occasion.name)”. Open Free Split on your phone and stand near me."
-        }
-        return "Join my Free Split group “\(occasion.name)” with code \(code). Open Free Split → Join with Code, then stand near me with the app open."
     }
 
     private func shareSplit() {

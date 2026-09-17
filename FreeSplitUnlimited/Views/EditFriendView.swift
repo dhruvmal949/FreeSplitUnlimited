@@ -15,12 +15,8 @@ struct EditFriendView: View {
     var person: Person? = nil
 
     @State private var name = ""
-    @State private var workingPerson: Person?
-    @State private var originalName = ""
-    @State private var createdInSession = false
-    @State private var discardOnDismiss = false
-    @State private var isHydrating = false
-    @State private var autoSaveTask: Task<Void, Never>?
+    @State private var email = ""
+    @State private var phone = ""
 
     private var isEditing: Bool { person != nil }
 
@@ -30,7 +26,7 @@ struct EditFriendView: View {
 
     private var isNameUnique: Bool {
         !occasion.uniqueMembers.contains {
-            $0.id != workingPerson?.id
+            $0.id != person?.id
                 && $0.name.localizedCaseInsensitiveCompare(trimmedName) == .orderedSame
         }
     }
@@ -46,20 +42,30 @@ struct EditFriendView: View {
                     TextField("Name", text: $name)
                         .textContentType(.name)
                         .textInputAutocapitalization(.words)
+                    TextField("Email", text: $email)
+                        .keyboardType(.emailAddress)
+                        .textContentType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("Phone", text: $phone)
+                        .keyboardType(.phonePad)
+                        .textContentType(.telephoneNumber)
                 } header: {
                     Text("Friend details")
                 } footer: {
                     if !trimmedName.isEmpty && !isNameUnique {
                         Text("Someone with this name is already in this split.")
                             .foregroundStyle(.red)
+                    } else {
+                        Text("Email or phone is used to reach this person. If both are empty, you’ll be asked before saving an expense.")
                     }
                 }
 
                 Section {
                     Button {
-                        persistFriend(dismissAfter: true)
+                        save()
                     } label: {
-                        Text("Done")
+                        Text(isEditing ? "Save" : "Add Friend")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                     }
@@ -77,82 +83,36 @@ struct EditFriendView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        discardChanges()
-                    }
+                    Button("Cancel") { dismiss() }
                 }
             }
             .onAppear {
-                isHydrating = true
-                workingPerson = person
-                originalName = person?.name ?? ""
-                if name.isEmpty {
-                    name = originalName
-                }
-                DispatchQueue.main.async {
-                    isHydrating = false
-                }
-            }
-            .onChange(of: name) { _, _ in
-                guard !isHydrating else { return }
-                scheduleAutoSave()
-            }
-            .onDisappear {
-                autoSaveTask?.cancel()
-                if !discardOnDismiss {
-                    persistFriend(dismissAfter: false)
+                if let person {
+                    name = person.name
+                    email = person.email
+                    phone = person.phone
                 }
             }
         }
     }
 
-    private func scheduleAutoSave() {
-        autoSaveTask?.cancel()
-        autoSaveTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            persistFriend(dismissAfter: false)
-        }
-    }
+    private func save() {
+        guard canSave else { return }
 
-    private func discardChanges() {
-        discardOnDismiss = true
-        autoSaveTask?.cancel()
-        if createdInSession, let workingPerson {
-            modelContext.delete(workingPerson)
-            occasion.touch()
-            modelContext.persist()
-        } else if let person, person.name != originalName {
-            person.name = originalName
-            occasion.touch()
-            modelContext.persist()
-        }
-        dismiss()
-    }
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPhone = phone.trimmingCharacters(in: .whitespacesAndNewlines)
 
-    private func persistFriend(dismissAfter: Bool) {
-        guard canSave else {
-            if dismissAfter { dismiss() }
-            return
-        }
-        if let workingPerson {
-            if workingPerson.name != trimmedName {
-                workingPerson.name = trimmedName
-                occasion.touch()
-                modelContext.persist()
-            }
+        if let person {
+            person.name = trimmedName
+            person.setContact(email: trimmedEmail, phone: trimmedPhone)
         } else {
-            let newPerson = Person(name: trimmedName)
+            let newPerson = Person(name: trimmedName, email: trimmedEmail, phone: trimmedPhone)
             newPerson.occasion = occasion
             modelContext.insert(newPerson)
-            workingPerson = newPerson
-            createdInSession = true
-            occasion.touch()
-            modelContext.persist()
+            newPerson.setContact(email: trimmedEmail, phone: trimmedPhone)
         }
-        if dismissAfter {
-            discardOnDismiss = true
-            dismiss()
-        }
+        occasion.touch()
+        modelContext.persist()
+        dismiss()
     }
 }

@@ -23,13 +23,7 @@ struct AddExpenseView: View {
     @State private var date = Date()
     @State private var didLoadExisting = false
     @State private var sharePayload: ActivitySharePayload?
-    @State private var createdExpenseID: UUID?
-    @State private var discardOnDismiss = false
-    @State private var skipDismissSave = false
-    @State private var isHydrating = false
-    @State private var autoSaveTask: Task<Void, Never>?
-    @State private var originalSnapshot: ExpenseSnapshot?
-    @State private var didPersistEdits = false
+    @State private var showingMissingContactAlert = false
 
     private var isEditing: Bool { expenseToEdit != nil }
 
@@ -114,7 +108,7 @@ struct AddExpenseView: View {
                     HStack {
                         Text("Group")
                         Spacer()
-                        Text(occasion.name)
+                        Text(occasion.displayName)
                             .fontWeight(.semibold)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.trailing)
@@ -187,9 +181,9 @@ struct AddExpenseView: View {
 
                 Section {
                     Button {
-                        save()
+                        requestSave()
                     } label: {
-                        Text(isEditing ? "Done" : "Save Expense")
+                        Text(isEditing ? "Save Changes" : "Save Expense")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                     }
@@ -206,14 +200,14 @@ struct AddExpenseView: View {
                     VStack(spacing: 1) {
                         Text(isEditing ? "Edit Expense" : "Add Expense")
                             .font(.headline)
-                        Text(occasion.name)
+                        Text(occasion.displayName)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
                 }
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { discardChanges() }
+                    Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -225,7 +219,7 @@ struct AddExpenseView: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isEditing ? "Done" : "Add") { save() }
+                    Button(isEditing ? "Save" : "Add") { requestSave() }
                         .fontWeight(.semibold)
                         .disabled(!canSave)
                 }
@@ -236,22 +230,39 @@ struct AddExpenseView: View {
             .onAppear {
                 loadExistingIfNeeded()
             }
-            .onChange(of: title) { _, _ in scheduleAutoSave() }
-            .onChange(of: amountText) { _, _ in scheduleAutoSave() }
-            .onChange(of: date) { _, _ in scheduleAutoSave() }
-            .onChange(of: paidByID) { _, _ in scheduleAutoSave() }
-            .onChange(of: selectedParticipantIDs) { _, _ in scheduleAutoSave() }
-            .onChange(of: shareValues) { _, _ in scheduleAutoSave() }
-            .onChange(of: splitMethod) { _, _ in scheduleAutoSave() }
-            .onDisappear {
-                autoSaveTask?.cancel()
-                if !discardOnDismiss && !skipDismissSave && sharePayload == nil {
-                    persistExpense()
-                }
-            }
             .sheet(item: $sharePayload) { payload in
                 ActivityShareSheet(payload: payload)
             }
+            .alert("Missing email or phone", isPresented: $showingMissingContactAlert) {
+                Button("Save Anyway") { save() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(missingContactMessage)
+            }
+        }
+    }
+
+    private var peopleMissingContact: [Person] {
+        var ids = selectedParticipantIDs
+        if let paidByID { ids.insert(paidByID) }
+        return sortedMembers.filter { person in
+            ids.contains(person.id)
+                && FriendPairing.isUsableName(person.name)
+                && !person.hasContactInfo
+        }
+    }
+
+    private var missingContactMessage: String {
+        let names = peopleMissingContact.map(\.name).joined(separator: ", ")
+        return "\(names) \(peopleMissingContact.count == 1 ? "has" : "have") no email or phone. Add contact info in Group Settings so they can be reached, or save this expense anyway."
+    }
+
+    private func requestSave() {
+        guard canSave else { return }
+        if peopleMissingContact.isEmpty {
+            save()
+        } else {
+            showingMissingContactAlert = true
         }
     }
 
@@ -431,7 +442,6 @@ struct AddExpenseView: View {
     private func loadExistingIfNeeded() {
         guard !didLoadExisting else { return }
         didLoadExisting = true
-        isHydrating = true
 
         if let expense = expenseToEdit {
             title = expense.title
@@ -450,7 +460,6 @@ struct AddExpenseView: View {
             if splitMethod != .equal, loadedShares.isEmpty {
                 ensureDefaultShares(for: Array(selectedParticipantIDs), method: splitMethod)
             }
-            originalSnapshot = ExpenseSnapshot(from: expense)
         } else {
             if paidByID == nil {
                 paidByID = sortedMembers.first?.id
@@ -460,60 +469,18 @@ struct AddExpenseView: View {
             }
             ensureDefaultShares(for: Array(selectedParticipantIDs))
         }
-        DispatchQueue.main.async {
-            isHydrating = false
-        }
-    }
-
-    private func scheduleAutoSave() {
-        autoSaveTask?.cancel()
-        guard !isHydrating, canSave else { return }
-        // New expenses wait until Done / swipe-away so a half-typed amount
-        // does not show up in the split while this sheet is still open.
-        guard isEditing || createdExpenseID != nil else { return }
-        autoSaveTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(650))
-            guard !Task.isCancelled else { return }
-            persistExpense()
-        }
-    }
-
-    private func discardChanges() {
-        discardOnDismiss = true
-        autoSaveTask?.cancel()
-        if expenseToEdit == nil,
-           let createdExpenseID,
-           let created = occasion.expenses.first(where: { $0.id == createdExpenseID }) {
-            modelContext.delete(created)
-            occasion.touch()
-            modelContext.persist()
-        } else if let expense = expenseToEdit,
-                  let originalSnapshot,
-                  didPersistEdits {
-            restore(originalSnapshot, onto: expense)
-        }
-        dismiss()
     }
 
     private func save() {
-        persistExpense()
-        skipDismissSave = true
-        dismiss()
-    }
-
-    private func persistExpense() {
         guard canSave,
               let amount,
               let paidByID,
               let payer = sortedMembers.first(where: { $0.id == paidByID }) else { return }
 
         let participants = selectedMembers
-        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let existing = expenseToEdit
-            ?? occasion.expenses.first(where: { $0.id == createdExpenseID })
-        if let expense = existing {
-            expense.title = trimmedTitle
+        if let expense = expenseToEdit {
+            expense.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
             expense.amount = amount
             expense.date = date
             expense.splitMethodRaw = splitMethod.rawValue
@@ -522,7 +489,7 @@ struct AddExpenseView: View {
             replaceShares(on: expense, participants: participants)
         } else {
             let expense = Expense(
-                title: trimmedTitle,
+                title: title.trimmingCharacters(in: .whitespacesAndNewlines),
                 amount: amount,
                 date: date,
                 splitMethod: splitMethod,
@@ -533,39 +500,11 @@ struct AddExpenseView: View {
             expense.occasion = occasion
             modelContext.insert(expense)
             applyShares(to: expense, participants: participants)
-            createdExpenseID = expense.id
         }
 
         occasion.touch()
         modelContext.persist()
-        didPersistEdits = true
-    }
-
-    private func restore(_ snapshot: ExpenseSnapshot, onto expense: Expense) {
-        expense.title = snapshot.title
-        expense.amount = snapshot.amount
-        expense.date = snapshot.date
-        expense.splitMethodRaw = snapshot.splitMethodRaw
-        expense.paidBy = sortedMembers.first(where: { $0.id == snapshot.paidByID })
-        expense.participants = sortedMembers.filter { snapshot.participantIDs.contains($0.id) }
-        let existing = Array(expense.shares)
-        for share in existing {
-            modelContext.delete(share)
-        }
-        expense.shares = []
-        if snapshot.splitMethod != .equal {
-            var next: [ExpenseShare] = []
-            for person in expense.participants {
-                guard let value = snapshot.shareValues[person.id] else { continue }
-                let share = ExpenseShare(person: person, value: value)
-                share.expense = expense
-                modelContext.insert(share)
-                next.append(share)
-            }
-            expense.shares = next
-        }
-        occasion.touch()
-        modelContext.persist()
+        dismiss()
     }
 
     private func replaceShares(on expense: Expense, participants: [Person]) {
@@ -591,35 +530,5 @@ struct AddExpenseView: View {
             next.append(share)
         }
         expense.shares = next
-    }
-}
-
-private struct ExpenseSnapshot {
-    let title: String
-    let amount: Decimal
-    let date: Date
-    let splitMethodRaw: String
-    let paidByID: UUID?
-    let participantIDs: [UUID]
-    let shareValues: [UUID: Decimal]
-
-    var splitMethod: SplitMethod {
-        SplitMethod(rawValue: splitMethodRaw) ?? .equal
-    }
-
-    init(from expense: Expense) {
-        title = expense.title
-        amount = expense.amount
-        date = expense.date
-        splitMethodRaw = expense.splitMethodRaw
-        paidByID = expense.paidBy?.id
-        participantIDs = expense.uniqueParticipants.map(\.id)
-        var values: [UUID: Decimal] = [:]
-        for share in expense.shares {
-            if let id = share.person?.id {
-                values[id] = share.value
-            }
-        }
-        shareValues = values
     }
 }

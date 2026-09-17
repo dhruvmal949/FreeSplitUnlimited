@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     ) -> Bool {
         if let url = launchOptions?[.url] as? URL {
             IncomingURLCapture.capture(url)
+            _ = SocialAuthController.shared.handleURL(url)
         }
         return true
     }
@@ -26,6 +27,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         options: [UIApplication.OpenURLOptionsKey: Any] = [:]
     ) -> Bool {
         IncomingURLCapture.capture(url)
+        _ = SocialAuthController.shared.handleURL(url)
         return true
     }
 }
@@ -37,15 +39,11 @@ struct FreeSplitUnlimitedApp: App {
     private let container: ModelContainer?
 
     init() {
-        let container = Self.makeContainer()
-        self.container = container
-        // Restore and attach before any @Query view exists. Inserting a
-        // backup after Home is on screen traps SwiftData on the main thread.
-        if let container {
-            SplitBackup.restoreIfNeeded(into: container.mainContext)
-            IncomingSplitOpener.shared.attach(context: container.mainContext)
-            SyncCoordinator.shared.attach(context: container.mainContext)
+        if AppLaunchFlags.isUITesting {
+            KnownFriendsStore.resetForTesting()
+            DeletedGroupsStore.resetForTesting()
         }
+        container = Self.makeContainer()
     }
 
     var body: some Scene {
@@ -153,10 +151,7 @@ private struct RootView: View {
     let container: ModelContainer
     @ObservedObject private var session = AuthSession.shared
     @Environment(\.scenePhase) private var scenePhase
-
-    init(container: ModelContainer) {
-        self.container = container
-    }
+    @State private var didFinishFirstAppear = false
 
     var body: some View {
         Group {
@@ -174,19 +169,28 @@ private struct RootView: View {
             }
             IncomingSplitOpener.shared.attach(context: container.mainContext)
             SyncCoordinator.shared.attach(context: container.mainContext)
+            if session.isAuthenticated {
+                OccasionAccess.claimExistingGroupsIfNeeded(in: container.mainContext)
+            }
+            DispatchQueue.main.async {
+                didFinishFirstAppear = true
+            }
         }
         .onOpenURL { url in
+            if SocialAuthController.shared.handleURL(url) { return }
             IncomingURLCapture.capture(url)
             IncomingSplitOpener.shared.flushWhenReady()
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
+            guard phase == .active, didFinishFirstAppear else { return }
             IncomingSplitOpener.shared.attach(context: container.mainContext)
-            SyncCoordinator.shared.resume()
+            if session.isAuthenticated {
+                SyncCoordinator.shared.resume()
+            }
         }
         .onChange(of: session.isAuthenticated) { _, isAuthenticated in
-
             if isAuthenticated, !AppLaunchFlags.isUITesting {
+                OccasionAccess.claimExistingGroupsIfNeeded(in: container.mainContext)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     SyncCoordinator.shared.startNearby()
                 }

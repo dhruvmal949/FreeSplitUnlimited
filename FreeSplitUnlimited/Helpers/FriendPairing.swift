@@ -196,9 +196,6 @@ enum FriendPairing {
             }
         }
 
-        if merged.joinCode.isEmpty {
-            merged.joinCode = incoming.joinCode
-        }
         merged.updatedAt = max(merged.updatedAt, incoming.updatedAt)
         if addedRemote {
             merged.updatedAt = max(merged.updatedAt, Date.now)

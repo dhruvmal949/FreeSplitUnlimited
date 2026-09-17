@@ -47,7 +47,20 @@
 				<string>freesplit</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.pramela.freesplitunlimited.google-oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.pramela.freesplitunlimited</string>
+				<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
+			</array>
+		</dict>
 	</array>
+	<key>GIDClientID</key>
+	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>venmo</string>
@@ -66,6 +79,8 @@
 		<string>_freesplit-mesh._tcp</string>
 		<string>_freesplit-mesh._udp</string>
 	</array>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Free Split uses Face ID to open your existing account on this iPhone.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Free Split uses your contacts so you can add friends to a split. You can allow all contacts or only the ones you choose.</string>
 	<key>NSLocalNetworkUsageDescription</key>
