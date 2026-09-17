@@ -19,6 +19,10 @@ final class Occasion {
     var isDeleted: Bool = false
     /// Stored as a string so older SwiftData stores can load without trapping.
     var groupType: String = GroupKind.other.rawValue
+    /// Account that created this group. Nil on older stores until claimed or stamped.
+    var ownerAccountID: UUID? = nil
+    /// Comma-separated account UUIDs that opened a share link or were granted this group.
+    var grantedAccountIDsRaw: String = ""
     @Relationship(deleteRule: .cascade, inverse: \Person.occasion)
     var members: [Person] = []
     @Relationship(deleteRule: .cascade, inverse: \Expense.occasion)
@@ -39,8 +43,41 @@ final class Occasion {
         self.updatedAt = updatedAt ?? createdAt
         self.isDeleted = false
         self.groupType = groupType
+        self.ownerAccountID = nil
+        self.grantedAccountIDsRaw = ""
         self.members = []
         self.expenses = []
+    }
+
+    var grantedAccountIDs: [UUID] {
+        get {
+            grantedAccountIDsRaw
+                .split(separator: ",")
+                .compactMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        }
+        set {
+            var seen = Set<UUID>()
+            grantedAccountIDsRaw = newValue
+                .filter { seen.insert($0).inserted }
+                .map(\.uuidString)
+                .joined(separator: ",")
+        }
+    }
+
+    func grantAccess(to accountID: UUID) {
+        var ids = grantedAccountIDs
+        guard !ids.contains(accountID) else { return }
+        ids.append(accountID)
+        grantedAccountIDs = ids
+    }
+
+    @MainActor
+    func assignCurrentOwner() {
+        guard let accountID = AuthSession.shared.accountID else { return }
+        if ownerAccountID == nil {
+            ownerAccountID = accountID
+        }
+        grantAccess(to: accountID)
     }
 
     var displayName: String {

@@ -20,7 +20,7 @@ enum AuthProvider: String {
 
     var title: String {
         switch self {
-        case .password: return "Username"
+            case .password: return "Email or phone"
         case .apple: return "Apple"
         case .google: return "Google"
         case .facebook: return "Facebook"
@@ -140,6 +140,29 @@ final class AuthSession: ObservableObject {
         }
     }
 
+    /// Stable ID for the signed-in account. Used to keep groups private per account.
+    var accountID: UUID? {
+        isGuest ? guestAccountID : currentAccountID
+    }
+
+    /// Phone on the local password account, if this login has one.
+    var accountPhone: String {
+        guard let id = currentAccountID else { return "" }
+        return loadAccounts().first { $0.id == id }?.phone ?? ""
+    }
+
+    /// Email or phone used to sign in. This is not a username.
+    var signedInHandle: String {
+        if isGuest { return "Guest" }
+        let mail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !mail.isEmpty { return mail }
+        if ContactUniqueness.phoneKey(accountPhone) != nil {
+            return formattedUSPhone(accountPhone)
+        }
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? provider.title : name
+    }
+
     /// Names that count as you when totaling balances (`Me` plus your sign-in name).
     var selfNames: [String] {
         var names = ["Me"]
@@ -194,6 +217,7 @@ final class AuthSession: ObservableObject {
     private var stagedPasswordLogin: (account: LocalAccount, login: String, password: String)?
     private var currentLogin = ""
     private var currentAccountID: UUID?
+    private var guestAccountID: UUID?
     private var suppressFaceIDUntil: Date?
     private var faceIDUnlockGeneration = 0
     /// After sign-out, wait this long before Face ID auto-opens the account again.
@@ -229,6 +253,7 @@ final class AuthSession: ObservableObject {
         stagedPasswordLogin = nil
         currentLogin = ""
         currentAccountID = nil
+        guestAccountID = nil
         suppressFaceIDUntil = nil
         faceIDUnlockGeneration = 0
         testingAsksFaceIDOptIn = false
@@ -237,6 +262,7 @@ final class AuthSession: ObservableObject {
         pairingNickname = ""
         wipeTestingAuthStore()
         BiometricAuth.resetOverrides()
+        OccasionAccess.resetForTesting()
     }
 
     var rememberedLogin: String {
@@ -563,6 +589,7 @@ final class AuthSession: ObservableObject {
 
     func continueAsGuest() {
         lastError = nil
+        guestAccountID = UUID()
         applySession(provider: .guest, name: "Guest", email: "", guest: true)
     }
 
@@ -625,6 +652,7 @@ final class AuthSession: ObservableObject {
         stagedPasswordLogin = nil
         currentLogin = ""
         currentAccountID = nil
+        guestAccountID = nil
         suppressFaceIDUntil = Date().addingTimeInterval(Self.signOutFaceIDCooldown)
         clearPersistedSession()
     }
@@ -686,8 +714,29 @@ final class AuthSession: ObservableObject {
             currentAccountID = nil
             clearUnlockSession()
         } else {
+            guestAccountID = nil
+            if currentAccountID == nil {
+                currentAccountID = Self.stableAccountID(email: email, login: currentLogin)
+            }
             saveUnlockSession()
         }
+    }
+
+    private static func stableAccountID(email: String, login: String) -> UUID {
+        let seed = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let fallback = login.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let keySeed = seed.isEmpty ? fallback : seed
+        let prefix = AppLaunchFlags.isAutomatedTesting ? "freeSplit.auth.stableAccount.testing." : "freeSplit.auth.stableAccount."
+        if !keySeed.isEmpty {
+            let key = prefix + keySeed
+            if let saved = UserDefaults.standard.string(forKey: key), let id = UUID(uuidString: saved) {
+                return id
+            }
+            let id = UUID()
+            UserDefaults.standard.set(id.uuidString, forKey: key)
+            return id
+        }
+        return UUID()
     }
 
     private func persistSession() {

@@ -231,8 +231,16 @@ final class MeshSyncService: NSObject, ObservableObject {
         guard let session, !session.connectedPeers.isEmpty, let context else { return }
         let occasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
         guard !occasions.isEmpty else { return }
-        let backups = occasions.map(exportForMesh)
-        send(.occasions(backups), to: session.connectedPeers)
+        let identity = AccountIdentity.current
+        for peer in session.connectedPeers {
+            let peerName = userName(for: peer) ?? peer.displayName
+            let backups = occasions
+                .filter { OccasionAccess.canSend($0, toPeerNamed: peerName, as: identity) }
+                .map(exportForMesh)
+            if !backups.isEmpty {
+                send(.occasions(backups), to: [peer])
+            }
+        }
     }
 
     // MARK: Discovery
@@ -393,10 +401,14 @@ final class MeshSyncService: NSObject, ObservableObject {
 
     private func sendManifest(to peer: MCPeerID) {
         guard let context else { return }
+        let identity = AccountIdentity.current
+        let peerName = userName(for: peer) ?? peer.displayName
         let occasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
-        let entries = occasions.map {
-            MeshManifestEntry(id: $0.id, updatedAt: $0.updatedAt, isDeleted: $0.isDeleted)
-        }
+        let entries = occasions
+            .filter { OccasionAccess.canSend($0, toPeerNamed: peerName, as: identity) }
+            .map {
+                MeshManifestEntry(id: $0.id, updatedAt: $0.updatedAt, isDeleted: $0.isDeleted)
+            }
         send(.manifest(entries), to: [peer])
     }
 
@@ -405,6 +417,8 @@ final class MeshSyncService: NSObject, ObservableObject {
 
         switch message {
         case .manifest(let peerEntries):
+            let identity = AccountIdentity.current
+            let peerName = userName(for: peer) ?? peer.displayName
             let localOccasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
             var localByID: [UUID: Occasion] = [:]
             for occasion in localOccasions where localByID[occasion.id] == nil {
@@ -413,11 +427,9 @@ final class MeshSyncService: NSObject, ObservableObject {
 
             var idsWeNeed: [UUID] = []
             for entry in peerEntries {
-                if let local = localByID[entry.id] {
-                    if entry.updatedAt > local.updatedAt {
-                        idsWeNeed.append(entry.id)
-                    }
-                } else {
+                guard let local = localByID[entry.id] else { continue }
+                guard OccasionAccess.canAccess(local, as: identity) else { continue }
+                if entry.updatedAt > local.updatedAt {
                     idsWeNeed.append(entry.id)
                 }
             }
@@ -430,6 +442,7 @@ final class MeshSyncService: NSObject, ObservableObject {
                 peerByID[entry.id] = entry
             }
             let toSend = localOccasions.filter { occasion in
+                guard OccasionAccess.canSend(occasion, toPeerNamed: peerName, as: identity) else { return false }
                 guard let peerEntry = peerByID[occasion.id] else { return true }
                 return occasion.updatedAt > peerEntry.updatedAt
             }
@@ -438,8 +451,12 @@ final class MeshSyncService: NSObject, ObservableObject {
             }
 
         case .request(let ids):
+            let identity = AccountIdentity.current
+            let peerName = userName(for: peer) ?? peer.displayName
             let localOccasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
-            let matches = localOccasions.filter { ids.contains($0.id) }
+            let matches = localOccasions.filter {
+                ids.contains($0.id) && OccasionAccess.canSend($0, toPeerNamed: peerName, as: identity)
+            }
             guard !matches.isEmpty else { return }
             send(.occasions(matches.map(exportForMesh)), to: [peer])
 
@@ -447,7 +464,9 @@ final class MeshSyncService: NSObject, ObservableObject {
             var appliedIDs: [UUID] = []
             let peerName = userName(for: peer) ?? peer.displayName
             let selfNames = AuthSession.shared.selfNames
+            let identity = AccountIdentity.current
             let localOccasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
+            var accepted: [BackupOccasion] = []
             for backup in backups {
                 let incoming = FriendPairing.prepareIncoming(
                     backup,
@@ -455,15 +474,21 @@ final class MeshSyncService: NSObject, ObservableObject {
                     selfNames: selfNames,
                     localOccasions: localOccasions
                 )
+                guard OccasionAccess.shouldImport(incoming, as: identity) else { continue }
                 if let updated = try? SplitBackup.upsert(incoming, into: context) {
                     appliedIDs.append(updated.id)
+                    accepted.append(incoming)
                 }
             }
             if !appliedIDs.isEmpty {
                 NotificationCenter.default.post(name: .freeSplitDidImport, object: appliedIDs.first)
                 let otherPeers = session?.connectedPeers.filter { $0 != peer } ?? []
-                if !otherPeers.isEmpty {
-                    send(.occasions(backups), to: otherPeers)
+                for other in otherPeers {
+                    let otherName = userName(for: other) ?? other.displayName
+                    let relay = accepted.filter { OccasionAccess.canSend($0, toPeerNamed: otherName, as: identity) }
+                    if !relay.isEmpty {
+                        send(.occasions(relay), to: [other])
+                    }
                 }
             }
 

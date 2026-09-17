@@ -197,6 +197,7 @@ struct AddOccasionView: View {
         }
 
         occasion.members = people
+        occasion.assignCurrentOwner()
         modelContext.insert(occasion)
         for person in occasion.members {
             person.setContact(email: person.email, phone: person.phone)

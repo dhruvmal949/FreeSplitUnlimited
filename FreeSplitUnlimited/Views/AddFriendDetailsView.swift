@@ -130,13 +130,6 @@ struct AddFriendDetailsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Text("Don’t worry, nothing sends just yet. You will have another chance to review before sending.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 8)
-
             Spacer()
 
             Button {

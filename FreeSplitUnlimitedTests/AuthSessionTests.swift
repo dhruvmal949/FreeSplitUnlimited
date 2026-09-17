@@ -96,6 +96,8 @@ final class AuthSessionTests: XCTestCase {
         XCTAssertTrue(session.isAuthenticated)
         XCTAssertEqual(session.displayName, "Pat Lee")
         XCTAssertEqual(session.email, "pat@example.com")
+        XCTAssertEqual(session.signedInHandle, "pat@example.com")
+        XCTAssertEqual(session.provider.title, "Email or phone")
         XCTAssertEqual(session.provider, .password)
 
         session.signOut()
@@ -114,6 +116,7 @@ final class AuthSessionTests: XCTestCase {
         XCTAssertNil(session.logIn(username: "5551234567", password: "phone12"))
         XCTAssertTrue(session.isAuthenticated)
         XCTAssertEqual(session.displayName, "Sam Ortiz")
+        XCTAssertEqual(session.signedInHandle, "(555) 123-4567")
     }
 
     func testDuplicateEmailOrPhoneIsRejected() {

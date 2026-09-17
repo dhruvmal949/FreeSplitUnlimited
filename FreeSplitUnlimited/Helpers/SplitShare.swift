@@ -241,6 +241,7 @@ enum SplitShare {
     }
 
     /// Imports a shared split. Always applies the file so opening it actually shows the split.
+    @MainActor
     @discardableResult
     static func importFile(at url: URL, into context: ModelContext) throws -> Occasion {
         if ShareLink.isPayloadLink(url) {
@@ -265,55 +266,75 @@ enum SplitShare {
         return try importData(data, into: context)
     }
 
+    @MainActor
     @discardableResult
     static func importData(_ data: Data, into context: ModelContext) throws -> Occasion {
         if let package = try? decode(from: data) {
-            return try applyOpenedShare(package.occasion, into: context)
+            return try applyOpenedShare(package.occasion, into: context, grantCurrentUser: true)
         }
         if let package = try? ShareLink.package(fromPayload: data) {
-            return try applyOpenedShare(package.occasion, into: context)
+            return try applyOpenedShare(package.occasion, into: context, grantCurrentUser: true)
         }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         if let snapshot = try? decoder.decode(SplitsBackupSnapshot.self, from: data),
            !snapshot.occasions.isEmpty {
-            var imported: Occasion?
-            for occasion in snapshot.occasions {
-                imported = try applyOpenedShare(occasion, into: context)
-            }
-            guard let imported else { throw ShareError.invalidFile }
-            return imported
+            return try importSnapshot(snapshot, into: context)
         }
 
         if let package = try? JSONDecoder().decode(Package.self, from: data) {
-            return try applyOpenedShare(package.occasion, into: context)
+            return try applyOpenedShare(package.occasion, into: context, grantCurrentUser: true)
         }
         if let snapshot = try? JSONDecoder().decode(SplitsBackupSnapshot.self, from: data),
            !snapshot.occasions.isEmpty {
-            var imported: Occasion?
-            for occasion in snapshot.occasions {
-                imported = try applyOpenedShare(occasion, into: context)
-            }
-            guard let imported else { throw ShareError.invalidFile }
-            return imported
+            return try importSnapshot(snapshot, into: context)
         }
 
         throw ShareError.invalidFile
     }
 
-    /// Explicit file open should always win, including undeleting a local copy.
-    private static func applyOpenedShare(_ backup: BackupOccasion, into context: ModelContext) throws -> Occasion {
+    @MainActor
+    private static func importSnapshot(_ snapshot: SplitsBackupSnapshot, into context: ModelContext) throws -> Occasion {
+        let identity = AccountIdentity.current
+        let grantSingle = snapshot.occasions.count == 1
+        var imported: Occasion?
+        for occasion in snapshot.occasions {
+            if grantSingle || OccasionAccess.canAccess(occasion, as: identity) {
+                imported = try applyOpenedShare(occasion, into: context, grantCurrentUser: grantSingle)
+            }
+        }
+        guard let imported else { throw ShareError.invalidFile }
+        return imported
+    }
+
+    /// Explicit file or invite link should add only this group to the current account.
+    @MainActor
+    private static func applyOpenedShare(
+        _ backup: BackupOccasion,
+        into context: ModelContext,
+        grantCurrentUser: Bool
+    ) throws -> Occasion {
         var backup = backup
+        if grantCurrentUser {
+            backup = OccasionAccess.grantCurrentUser(backup)
+        }
         backup.isDeleted = false
         backup.updatedAt = max(backup.updatedAt, Date.now)
         if let updated = try SplitBackup.upsert(backup, into: context, force: true) {
+            if grantCurrentUser, let accountID = AuthSession.shared.accountID {
+                updated.grantAccess(to: accountID)
+                try? context.save()
+            }
             return updated
         }
         let existing = ((try? context.fetch(FetchDescriptor<Occasion>())) ?? [])
             .first(where: { $0.id == backup.id })
         if let existing {
             existing.isDeleted = false
+            if grantCurrentUser, let accountID = AuthSession.shared.accountID {
+                existing.grantAccess(to: accountID)
+            }
             return existing
         }
         throw ShareError.invalidFile

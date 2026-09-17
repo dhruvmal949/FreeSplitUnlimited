@@ -9,6 +9,7 @@ import SwiftData
 struct FriendsView: View {
     @Query(sort: \Occasion.createdAt, order: .reverse)
     private var allOccasions: [Occasion]
+    @ObservedObject private var session = AuthSession.shared
     @State private var showingFilter = false
     @State private var filter: FriendBalanceFilter = .none
     @State private var showingAddOccasion = false
@@ -20,8 +21,14 @@ struct FriendsView: View {
     }
 
     private var occasions: [Occasion] {
+        let identity = AccountIdentity(
+            accountID: session.accountID,
+            email: session.email,
+            phone: session.accountPhone,
+            names: session.selfNames.filter { FriendPairing.isUsableName($0) }
+        )
         var seen = Set<UUID>()
-        return allOccasions.filter { $0.shouldAppearInLists && seen.insert($0.id).inserted }
+        return allOccasions.filter { OccasionAccess.isVisible($0, as: identity) && seen.insert($0.id).inserted }
     }
 
     private var friends: [FriendSummary] {

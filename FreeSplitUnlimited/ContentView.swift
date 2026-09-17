@@ -10,6 +10,7 @@ import UIKit
 
 struct ContentView: View {
     @Query(sort: \Occasion.createdAt, order: .reverse) private var allOccasions: [Occasion]
+    @ObservedObject private var session = AuthSession.shared
     @State private var selectedTab = 1
     @State private var navigationEpoch = UUID()
     @State private var settingsGroupID: UUID?
@@ -56,7 +57,18 @@ struct ContentView: View {
 
     private var settingsOccasion: Occasion? {
         guard let settingsGroupID else { return nil }
-        return allOccasions.first { $0.id == settingsGroupID }
+        return allOccasions.first {
+            $0.id == settingsGroupID
+                && OccasionAccess.isVisible(
+                    $0,
+                    as: AccountIdentity(
+                        accountID: session.accountID,
+                        email: session.email,
+                        phone: session.accountPhone,
+                        names: session.selfNames.filter { FriendPairing.isUsableName($0) }
+                    )
+                )
+        }
     }
 
     private func jumpToHome() {
@@ -141,6 +153,7 @@ private struct GroupsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Occasion.createdAt, order: .reverse)
     private var allOccasions: [Occasion]
+    @ObservedObject private var session = AuthSession.shared
     @State private var showingAddOccasion = false
     @State private var showingImporter = false
     @State private var statusMessage: StatusMessage?
@@ -162,10 +175,16 @@ private struct GroupsView: View {
 
     /// Filter in Swift — `#Predicate` on SwiftData can trap (`brk`) after schema changes.
     private var occasions: [Occasion] {
+        let identity = AccountIdentity(
+            accountID: session.accountID,
+            email: session.email,
+            phone: session.accountPhone,
+            names: session.selfNames.filter { FriendPairing.isUsableName($0) }
+        )
         var seen = Set<UUID>()
         return allOccasions.filter { occasion in
             !hiddenGroupIDs.contains(occasion.id)
-                && occasion.shouldAppearInLists
+                && OccasionAccess.isVisible(occasion, as: identity)
                 && seen.insert(occasion.id).inserted
         }
     }

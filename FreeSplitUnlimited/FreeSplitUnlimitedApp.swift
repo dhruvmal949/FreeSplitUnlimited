@@ -169,6 +169,9 @@ private struct RootView: View {
             }
             IncomingSplitOpener.shared.attach(context: container.mainContext)
             SyncCoordinator.shared.attach(context: container.mainContext)
+            if session.isAuthenticated {
+                OccasionAccess.claimExistingGroupsIfNeeded(in: container.mainContext)
+            }
             DispatchQueue.main.async {
                 didFinishFirstAppear = true
             }
@@ -187,6 +190,7 @@ private struct RootView: View {
         }
         .onChange(of: session.isAuthenticated) { _, isAuthenticated in
             if isAuthenticated, !AppLaunchFlags.isUITesting {
+                OccasionAccess.claimExistingGroupsIfNeeded(in: container.mainContext)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     SyncCoordinator.shared.startNearby()
                 }

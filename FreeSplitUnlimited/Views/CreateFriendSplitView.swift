@@ -146,6 +146,7 @@ struct CreateFriendSplitView: View {
             Person(name: "Me"),
             friendPerson
         ]
+        occasion.assignCurrentOwner()
         modelContext.insert(occasion)
         friendPerson.setContact(email: friendEmail, phone: friendPhone)
         modelContext.persist()

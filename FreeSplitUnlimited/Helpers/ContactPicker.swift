@@ -7,6 +7,7 @@
 //
 
 import Contacts
+import ContactsUI
 import SwiftUI
 import UIKit
 
@@ -30,6 +31,57 @@ enum ContactAuthorization {
             return true
         default:
             return false
+        }
+    }
+}
+
+/// Apple's contact picker. It does not need Full Access — the user can hand over one contact.
+struct SystemContactPicker: UIViewControllerRepresentable {
+    var onPick: (PickedContact) -> Void
+    var onCancel: () -> Void = {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> CNContactPickerViewController {
+        let picker = CNContactPickerViewController()
+        picker.delegate = context.coordinator
+        picker.displayedPropertyKeys = [
+            CNContactGivenNameKey,
+            CNContactMiddleNameKey,
+            CNContactFamilyNameKey,
+            CNContactOrganizationNameKey,
+            CNContactEmailAddressesKey,
+            CNContactPhoneNumbersKey
+        ]
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: CNContactPickerViewController, context: Context) {
+        context.coordinator.onPick = onPick
+        context.coordinator.onCancel = onCancel
+    }
+
+    final class Coordinator: NSObject, CNContactPickerDelegate {
+        var onPick: (PickedContact) -> Void
+        var onCancel: () -> Void
+
+        init(onPick: @escaping (PickedContact) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick
+            self.onCancel = onCancel
+        }
+
+        func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
+            if let picked = PickedContact(contact: contact) {
+                onPick(picked)
+            } else {
+                onCancel()
+            }
+        }
+
+        func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
+            onCancel()
         }
     }
 }
@@ -137,7 +189,6 @@ struct PickedContact: Identifiable, Hashable {
         if name.isEmpty, contact.isKeyAvailable(CNContactOrganizationNameKey) {
             name = contact.organizationName.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        guard !name.isEmpty else { return nil }
 
         let emails: [String]
         if contact.isKeyAvailable(CNContactEmailAddressesKey) {
@@ -151,6 +202,10 @@ struct PickedContact: Identifiable, Hashable {
         } else {
             phones = []
         }
+        if name.isEmpty {
+            name = emails.first ?? phones.first ?? ""
+        }
+        guard !name.isEmpty else { return nil }
 
         self.id = isMe ? "me" : contact.identifier
         self.name = name
@@ -330,6 +385,7 @@ struct FriendSearchPicker: View {
     @State private var pendingAdd: PickedContact?
     @State private var detailsContact: PickedContact?
     @State private var duplicateWarning: String?
+    @State private var showingSystemPicker = false
     @FocusState private var searchFocused: Bool
 
     private var otherSelectedCount: Int {
@@ -508,6 +564,17 @@ struct FriendSearchPicker: View {
                         }
                     }
 
+                    Section {
+                        Button {
+                            showingSystemPicker = true
+                        } label: {
+                            Label("Choose a contact", systemImage: "person.crop.circle.badge.plus")
+                        }
+                        .accessibilityIdentifier("chooseOneContact")
+                    } footer: {
+                        Text("Picks one person from your phone. This works even if Contacts access is Off.")
+                    }
+
                     Section(usingContacts ? "From your contacts" : "Saved friends") {
                         if results.isEmpty {
                             Text(emptyResultsText)
@@ -565,6 +632,18 @@ struct FriendSearchPicker: View {
                 guard ContactAuthorization.canUseSystemPicker else { return }
                 usingContacts = true
                 onContactsAccessGranted()
+            }
+            .sheet(isPresented: $showingSystemPicker) {
+                SystemContactPicker(
+                    onPick: { contact in
+                        showingSystemPicker = false
+                        requestAdd(contact)
+                    },
+                    onCancel: {
+                        showingSystemPicker = false
+                    }
+                )
+                .ignoresSafeArea()
             }
             .confirmationDialog(
                 confirmationTitle,
@@ -649,8 +728,8 @@ struct FriendSearchPicker: View {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             return usingContacts
-                ? "Search to add other friends."
-                : "No other saved friends yet. Search or open Settings to use Contacts."
+                ? "Search to add other friends, or choose one contact."
+                : "No other saved friends yet. Choose a contact, or allow Contacts in Settings to search."
         }
         return "No matches for “\(trimmed)”."
     }
