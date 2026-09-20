@@ -110,6 +110,30 @@ final class FreeSplitUnlimitedTests: XCTestCase {
         XCTAssertEqual(decoded.occasion.members.first?.name, "Me")
     }
 
+    func testJoinPageOpensFreeSplitDeepLink() {
+        let html = JoinPage.html(payloadID: "abc123", groupName: "Cabin")
+        XCTAssertTrue(html.contains("href=\"freesplit://p/abc123\""))
+        XCTAssertTrue(html.contains("abc123"))
+        XCTAssertTrue(html.contains("Cabin"))
+        XCTAssertTrue(html.contains("apps.apple.com"))
+        XCTAssertFalse(html.contains("location.href = store"))
+        XCTAssertFalse(html.contains("preventDefault"))
+    }
+
+    func testJoinMarkdownRendersOpenAndStoreLinks() {
+        let markdown = JoinPage.markdown(payloadID: "abc123", groupName: "Safari")
+        XCTAssertTrue(markdown.contains("freesplit://p/abc123"))
+        XCTAssertTrue(markdown.contains("Safari"))
+        XCTAssertTrue(markdown.contains("apps.apple.com"))
+        XCTAssertFalse(markdown.contains("<script"))
+    }
+
+    func testPublishedJoinURLUsesMarkdownNotHighlightedHTML() throws {
+        let url = try ShareLink.publishedPageURL(pageID: "gDlm0")
+        XCTAssertEqual(url.pathExtension, "md")
+        XCTAssertFalse(url.absoluteString.hasSuffix(".html"))
+    }
+
     func testOneToOneSplitPromotesToGroupAtThreePeople() {
         let occasion = Occasion(name: "Alex", groupType: SplitKind.oneToOne)
         occasion.members = [Person(name: "Me"), Person(name: "Alex")]

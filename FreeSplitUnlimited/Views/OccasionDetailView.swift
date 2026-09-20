@@ -139,6 +139,7 @@ struct OccasionDetailView: View {
         .friendInvite(
             contacts: $inviteContacts,
             splitName: occasion.displayName,
+            occasion: occasion,
             onSent: markInviteSent
         )
         .alert("Name this group", isPresented: $showingRenameGroup) {

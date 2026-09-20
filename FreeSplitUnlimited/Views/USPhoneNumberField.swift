@@ -29,7 +29,16 @@ struct USPhoneNumberField: UIViewRepresentable {
         field.accessibilityIdentifier = accessibilityIdentifier
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.setContentHuggingPriority(.required, for: .vertical)
+        field.setContentCompressionResistancePriority(.required, for: .vertical)
+        field.inputAssistantItem.leadingBarButtonGroups = []
+        field.inputAssistantItem.trailingBarButtonGroups = []
         return field
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextField, context: Context) -> CGSize? {
+        let width = proposal.width ?? uiView.intrinsicContentSize.width
+        return CGSize(width: width, height: uiView.intrinsicContentSize.height)
     }
 
     func updateUIView(_ uiView: UITextField, context: Context) {
@@ -39,14 +48,22 @@ struct USPhoneNumberField: UIViewRepresentable {
             uiView.text = formatted
         }
         uiView.isUserInteractionEnabled = isActive
-        uiView.textContentType = isActive ? .telephoneNumber : nil
-        uiView.keyboardType = .numberPad
+        let nextContent: UITextContentType? = isActive ? .telephoneNumber : nil
+        if uiView.textContentType != nextContent {
+            uiView.textContentType = nextContent
+        }
+        if uiView.keyboardType != .numberPad {
+            uiView.keyboardType = .numberPad
+        }
         syncFocus(uiView, coordinator: context.coordinator)
     }
 
     private func syncFocus(_ uiView: UITextField, coordinator: Coordinator) {
         coordinator.wantsFocus = isFocused && isActive
         coordinator.isActive = isActive
+        let shouldResign = !isActive && uiView.isFirstResponder
+        let shouldFocus = coordinator.wantsFocus && !uiView.isFirstResponder
+        guard shouldResign || shouldFocus else { return }
         DispatchQueue.main.async {
             if !coordinator.isActive {
                 if uiView.isFirstResponder {

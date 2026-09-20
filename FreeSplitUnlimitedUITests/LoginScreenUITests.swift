@@ -9,6 +9,7 @@ final class LoginScreenUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
     }
 
     @MainActor
@@ -20,7 +21,8 @@ final class LoginScreenUITests: XCTestCase {
         XCTAssertTrue(app.buttons["loginRememberMe"].exists)
         XCTAssertTrue(app.buttons["loginForgotPassword"].exists)
         XCTAssertTrue(app.buttons["loginSignInButton"].exists)
-        XCTAssertTrue(app.buttons["loginGuestButton"].exists)
+        XCTAssertFalse(app.buttons["loginGuestButton"].exists)
+        XCTAssertFalse(app.buttons["Guest"].exists)
         XCTAssertTrue(app.buttons["loginCreateAccount"].exists)
         XCTAssertTrue(app.buttons["loginGoogleButton"].exists)
         XCTAssertFalse(app.buttons["loginAppleButton"].exists)
@@ -126,16 +128,12 @@ final class LoginScreenUITests: XCTestCase {
     }
 
     @MainActor
-    func testGuestReachesHomeAndCanSignOutToLogin() {
+    func testLoginScreenDoesNotOfferGuest() {
         let app = launchApp()
-        app.buttons["loginGuestButton"].tap()
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 6))
-
-        tapTab(app, "Settings")
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Guest"].waitForExistence(timeout: 4))
-        app.buttons["Sign Out"].tap()
-        XCTAssertTrue(app.textFields["loginEmailField"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["loginSignInButton"].waitForExistence(timeout: 6))
+        XCTAssertFalse(app.buttons["loginGuestButton"].exists)
+        XCTAssertFalse(app.buttons["Guest"].exists)
+        XCTAssertFalse(app.buttons["Continue as Guest"].exists)
     }
 
     @MainActor
@@ -217,7 +215,9 @@ final class LoginScreenUITests: XCTestCase {
         type(app.textFields["createFirstNameField"], "Sam")
         type(app.textFields["createLastNameField"], "Ortiz")
         tapKeyboardDone(app)
-        app.buttons["Phone"].tap()
+        let phoneKind = app.segmentedControls["createContactKind"].buttons["Phone"]
+        XCTAssertTrue(phoneKind.waitForExistence(timeout: 3))
+        phoneKind.tap()
         type(app.textFields["createContactField"], "5551234567")
         tapKeyboardDone(app)
         type(app.secureTextFields["createPasswordField"], "phone12")

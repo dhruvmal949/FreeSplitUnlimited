@@ -108,6 +108,7 @@ struct CreateFriendSplitView: View {
         .friendInvite(
             contacts: $inviteContacts,
             splitName: trimmedFriendName,
+            occasion: createdOccasion,
             onSent: markInviteSent,
             onFinished: finishCreateIfNeeded
         )
@@ -161,7 +162,9 @@ struct CreateFriendSplitView: View {
             personID: friend?.id
         )
         if FriendInvite.needsInvite(inviteContact) {
-            inviteContacts = [inviteContact]
+            DispatchQueue.main.async {
+                inviteContacts = [inviteContact]
+            }
         } else {
             finishCreateIfNeeded()
         }

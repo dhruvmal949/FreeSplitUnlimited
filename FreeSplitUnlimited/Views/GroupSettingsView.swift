@@ -72,16 +72,10 @@ struct GroupSettingsView: View {
                             }
                         }
                     }
-                    Text("Contact info is locked after someone is added. Swipe left to delete a person added by mistake. Notify sends one text or email.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
 
                 Section {
                     if confirmDelete {
-                        Text("This removes the group from this phone. Nearby phones will get the deletion the next time they sync.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
                         Button("Delete Group", role: .destructive) {
                             deleteGroup()
                         }
@@ -117,6 +111,7 @@ struct GroupSettingsView: View {
             .friendInvite(
                 contacts: $inviteContacts,
                 splitName: occasion.displayName,
+                occasion: occasion,
                 onSent: markInviteSent
             )
             .confirmationDialog(

@@ -69,10 +69,11 @@ struct EmailPhonePicker: View {
     var fieldIdentifier: String
     var pickerIdentifier: String
     var hintIdentifier: String? = nil
+    var usesFilledChrome: Bool = true
     var onKindChange: (() -> Void)? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Picker("Email or phone", selection: $entry.kind) {
                 ForEach(ContactKind.allCases) { kind in
                     Text(kind.rawValue).tag(kind)
@@ -81,26 +82,7 @@ struct EmailPhonePicker: View {
             .pickerStyle(.segmented)
             .accessibilityIdentifier(pickerIdentifier)
 
-            ZStack {
-                EmailAddressField(
-                    text: $entry.email,
-                    isActive: entry.kind == .email,
-                    accessibilityIdentifier: fieldIdentifier
-                )
-                .opacity(entry.kind == .email ? 1 : 0)
-                .allowsHitTesting(entry.kind == .email)
-                .accessibilityHidden(entry.kind != .email)
-
-                USPhoneNumberField(
-                    text: $entry.phone,
-                    isActive: entry.kind == .phone,
-                    accessibilityIdentifier: fieldIdentifier
-                )
-                .opacity(entry.kind == .phone ? 1 : 0)
-                .allowsHitTesting(entry.kind == .phone)
-                .accessibilityHidden(entry.kind != .phone)
-            }
-            .authInputChrome()
+            contactField
 
             if let hint = entry.hint {
                 Text(hint)
@@ -112,6 +94,38 @@ struct EmailPhonePicker: View {
         }
         .onChange(of: entry.kind) { _, _ in
             onKindChange?()
+        }
+    }
+
+    @ViewBuilder
+    private var contactField: some View {
+        let field = Group {
+            if entry.kind == .email {
+                EmailAddressField(
+                    text: $entry.email,
+                    isActive: true,
+                    accessibilityIdentifier: fieldIdentifier
+                )
+            } else {
+                USPhoneNumberField(
+                    text: $entry.phone,
+                    isActive: true,
+                    accessibilityIdentifier: fieldIdentifier
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24, alignment: .leading)
+
+        if usesFilledChrome {
+            field.authInputChrome()
+        } else {
+            field
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+                }
         }
     }
 }
@@ -161,6 +175,14 @@ func passwordsMatch(_ password: String, _ confirmPassword: String) -> Bool {
 func isValidEmail(_ email: String) -> Bool {
     let emailRegex = /[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/
     return email.trimmingCharacters(in: .whitespacesAndNewlines).wholeMatch(of: emailRegex) != nil
+}
+
+func looksLikePhoneTyping(_ raw: String) -> Bool {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return false }
+    if trimmed.contains("@") { return false }
+    if trimmed.contains(where: \.isLetter) { return false }
+    return trimmed.contains(where: \.isNumber)
 }
 
 func formattedUSPhone(_ raw: String) -> String {

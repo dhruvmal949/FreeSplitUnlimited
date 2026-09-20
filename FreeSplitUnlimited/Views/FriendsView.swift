@@ -122,8 +122,21 @@ struct FriendsView: View {
                     .homeBackButton()
             }
         }
+        .onAppear {
+            openImportedSplitIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .freeSplitDidImport)) { _ in
+            openImportedSplitIfNeeded()
+        }
         .freeSplitBackground()
         .avoidsMainTabBar()
+    }
+
+    private func openImportedSplitIfNeeded() {
+        guard let id = IncomingSplitOpener.shared.pendingOpenID else { return }
+        guard let occasion = occasions.first(where: { $0.id == id }), !occasion.appearsInGroups else { return }
+        IncomingSplitOpener.shared.consumePendingOpen()
+        openedGroupID = OpenedGroup(id: id)
     }
 
     private func friendRow(_ friend: FriendSummary) -> some View {

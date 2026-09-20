@@ -35,31 +35,27 @@ enum ShareLink {
         return try JSONDecoder().decode(WirePackage.self, from: json).asPackage()
     }
 
-    /// Uploads the split and returns a short https join link, like Splitwise.
+    /// Uploads the split and a markdown opener. paste.rs `.html` shows source; `.md` renders a real page.
     static func publish(_ package: SplitShare.Package, groupName: String = "") async throws -> URL {
         let payload = try payload(from: package)
         let dataID = try await post(payload, contentType: "application/octet-stream")
-        return try joinURL(payloadID: dataID, groupName: groupName)
+        let markdown = JoinPage.markdown(payloadID: dataID, groupName: groupName)
+        let pageID = try await post(Data(markdown.utf8), contentType: "text/markdown")
+        return try publishedPageURL(pageID: pageID)
+    }
+
+    static func publishedPageURL(pageID: String) throws -> URL {
+        guard isSafeSlug(pageID), let url = URL(string: "\(pasteHost)/\(pageID).md") else {
+            throw SplitShare.ShareError.linkUnavailable
+        }
+        return url
     }
 
     static func joinURL(payloadID: String, groupName: String) throws -> URL {
         guard isSafeSlug(payloadID) else {
             throw SplitShare.ShareError.linkUnavailable
         }
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = "cdn.jsdelivr.net"
-        components.path = "/gh/dhruvmal949/FreeSplitUnlimited@PramelaDev/docs/join.html"
-        var items = [URLQueryItem(name: "p", value: payloadID)]
-        let trimmed = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            items.append(URLQueryItem(name: "n", value: trimmed))
-        }
-        components.queryItems = items
-        guard let url = components.url else {
-            throw SplitShare.ShareError.linkUnavailable
-        }
-        return url
+        return try publishedPageURL(pageID: payloadID)
     }
 
     static func isPayloadLink(_ url: URL) -> Bool {
@@ -103,7 +99,7 @@ enum ShareLink {
               let posted = URL(string: text) else {
             throw SplitShare.ShareError.linkUnavailable
         }
-        let slug = posted.lastPathComponent
+        let slug = (posted.lastPathComponent as NSString).deletingPathExtension
         guard isSafeSlug(slug) else {
             throw SplitShare.ShareError.linkUnavailable
         }
@@ -114,6 +110,85 @@ enum ShareLink {
         !slug.isEmpty
             && slug.count < 64
             && slug.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) }
+    }
+}
+
+enum JoinPage {
+    static func markdown(payloadID: String, groupName: String) -> String {
+        let id = payloadID.filter { $0.isLetter || $0.isNumber }
+        let rawName = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = rawName
+            .replacingOccurrences(of: "[", with: "(")
+            .replacingOccurrences(of: "]", with: ")")
+        let title = name.isEmpty ? "this split" : name
+        let deep = "\(SplitShare.urlScheme)://p/\(id)"
+        let store = ShareLink.appStoreURL.absoluteString
+        return """
+        # Join \(title) on Free Split
+
+        I added you to this split.
+
+        **[Open in Free Split](\(deep))**
+
+        If Free Split is on your phone, that opens the split. If not, get it here:
+
+        **[Get Free Split on the App Store](\(store))**
+        """
+    }
+
+    static func html(payloadID: String, groupName: String) -> String {
+        let id = payloadID.filter { $0.isLetter || $0.isNumber }
+        let idJSON = jsonString(id)
+        let nameJSON = jsonString(groupName.trimmingCharacters(in: .whitespacesAndNewlines))
+        let store = ShareLink.appStoreURL.absoluteString
+        let deep = "\(SplitShare.urlScheme)://p/\(id)"
+        return """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Join on Free Split</title>
+          <style>
+            body { margin: 0; min-height: 100vh; font-family: -apple-system, sans-serif;
+              background: linear-gradient(160deg, #115e59, #0d9488); display: flex;
+              align-items: center; justify-content: center; padding: 24px; }
+            .card { background: #fff; color: #134e4a; border-radius: 24px; padding: 32px 24px;
+              max-width: 380px; width: 100%; text-align: center; }
+            a.btn { display: block; background: #0f766e; color: #fff; text-decoration: none;
+              font-weight: 700; padding: 14px 16px; border-radius: 14px; margin-bottom: 12px; }
+            a.store { display: block; color: #0f766e; font-weight: 600; text-decoration: none; padding: 10px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h1>Hey friends!</h1>
+            <p id="subtitle">Join this group on Free Split.</p>
+            <a class="btn" id="open" href="\(deep)">Open in Free Split</a>
+            <a class="store" id="store" href="\(store)">Don't have the app? Get it on the App Store</a>
+          </div>
+          <script>
+            var id = \(idJSON);
+            var name = \(nameJSON);
+            var store = \(jsonString(store));
+            var deep = "freesplit://p/" + encodeURIComponent(id);
+            if (name) {
+              document.getElementById("subtitle").textContent = "Join my group '" + name + "' on Free Split.";
+            }
+            document.getElementById("open").href = deep;
+            document.getElementById("store").href = store;
+            if (id) {
+              window.location.href = deep;
+            }
+          </script>
+        </body>
+        </html>
+        """
+    }
+
+    private static func jsonString(_ value: String) -> String {
+        let data = (try? JSONEncoder().encode(value)) ?? Data("\"\"".utf8)
+        return String(data: data, encoding: .utf8) ?? "\"\""
     }
 }
 

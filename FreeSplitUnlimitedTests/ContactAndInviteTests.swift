@@ -91,6 +91,35 @@ final class FriendInviteTests: XCTestCase {
         XCTAssertEqual(payloads[0].recipients, ["+15551112222", "+15553334444"])
         XCTAssertEqual(payloads[0].personIDs, [alexID, blairID])
         XCTAssertTrue(payloads[0].body.contains("Cabin"))
+        XCTAssertTrue(payloads[0].body.contains("apps.apple.com"))
+    }
+
+    func testPayloadsSendsOneEmailPerAddress() {
+        let payloads = FriendInvite.payloads(
+            for: [
+                PickedContact(name: "Alex", email: "alex@example.com"),
+                PickedContact(name: "Blair", email: "blair@example.com")
+            ],
+            splitName: "Safari"
+        )
+        XCTAssertEqual(payloads.map(\.recipients), [["alex@example.com"], ["blair@example.com"]])
+        XCTAssertTrue(payloads[0].body.contains("Email: alex@example.com"))
+        XCTAssertTrue(payloads[1].body.contains("Email: blair@example.com"))
+        XCTAssertFalse(payloads[0].body.contains("blair@example.com"))
+    }
+
+    func testInviteMessageUsesJoinLinkWhenProvided() {
+        let join = URL(string: "https://paste.rs/abc123.html")!
+        let payloads = FriendInvite.payloads(
+            for: [PickedContact(name: "Alex", phone: "5551112222")],
+            splitName: "Cabin",
+            joinURL: join
+        )
+        XCTAssertEqual(payloads.count, 1)
+        XCTAssertTrue(payloads[0].body.contains(join.absoluteString))
+        XCTAssertTrue(payloads[0].body.contains("Tap this link"))
+        XCTAssertFalse(payloads[0].body.contains("apps.apple.com"))
+        XCTAssertFalse(payloads[0].body.contains("freesplit://"))
     }
 
     func testPayloadsIncludesEmailOnlyPeopleSeparately() {
@@ -104,8 +133,69 @@ final class FriendInviteTests: XCTestCase {
 
         XCTAssertEqual(payloads.count, 2)
         XCTAssertEqual(payloads[0].recipients, ["+15551112222"])
+        XCTAssertTrue(payloads[0].isPhoneInvite)
         XCTAssertEqual(payloads[1].recipients, ["casey@example.com"])
         XCTAssertFalse(payloads[1].isPhoneInvite)
+        XCTAssertTrue(payloads[1].body.contains("Email: casey@example.com"))
+        XCTAssertFalse(payloads[0].body.contains("@"))
+    }
+
+    func testPayloadsSendsEmailEvenWhenThePersonAlsoHasAPhone() {
+        let payloads = FriendInvite.payloads(
+            for: [PickedContact(name: "Casey", email: "casey@example.com", phone: "5551112222")],
+            splitName: "Trip"
+        )
+        XCTAssertEqual(payloads.map(\.recipients), [["+15551112222"], ["casey@example.com"]])
+        XCTAssertTrue(payloads[1].body.contains("casey@example.com"))
+        XCTAssertFalse(payloads[0].body.contains("casey@example.com"))
+    }
+
+    func testEmailInviteBodyMentionsAddressAndShortLink() {
+        let join = URL(string: "https://paste.rs/abc123.html")!
+        let payloads = FriendInvite.payloads(
+            for: [PickedContact(name: "Casey", email: "casey@example.com")],
+            splitName: "Safari",
+            joinURL: join
+        )
+        XCTAssertEqual(payloads.count, 1)
+        XCTAssertFalse(payloads[0].isPhoneInvite)
+        XCTAssertTrue(payloads[0].body.contains("Email: casey@example.com"))
+        XCTAssertTrue(payloads[0].body.contains(join.absoluteString))
+        XCTAssertFalse(payloads[0].body.contains("apps.apple.com"))
+        XCTAssertFalse(payloads[0].body.contains("freesplit://"))
+    }
+
+    func testMailAndGmailFallbacksStayAvailableTogether() {
+        let payload = ComposePayload(
+            recipients: ["casey@example.com"],
+            body: "I added you to 'Safari' on Free Split.\nEmail: casey@example.com",
+            subject: "Join my split on Free Split"
+        )
+        let urls = FriendInvite.emailFallbackURLs(for: payload)
+        XCTAssertEqual(urls.map(\.scheme), ["mailto", "googlegmail"])
+        XCTAssertTrue(urls.contains { $0.absoluteString.contains("casey@example.com") })
+    }
+
+    func testMailURLIncludesGmailAddress() {
+        let url = FriendInvite.mailURL(
+            to: "name@gmail.com",
+            subject: "Join my split on Free Split",
+            body: "I added you to 'Trip' on Free Split."
+        )
+        XCTAssertNotNil(url)
+        XCTAssertEqual(url?.scheme, "mailto")
+        XCTAssertTrue(url?.absoluteString.contains("name@gmail.com") == true)
+        XCTAssertTrue(url?.absoluteString.contains("subject=") == true)
+    }
+
+    func testGmailFallbackURLIncludesRecipient() {
+        let url = FriendInvite.gmailURL(
+            to: ["name@gmail.com"],
+            subject: "Join my split on Free Split",
+            body: "I added you to 'Trip' on Free Split."
+        )
+        XCTAssertEqual(url?.scheme, "googlegmail")
+        XCTAssertTrue(url?.absoluteString.contains("name@gmail.com") == true)
     }
 
     func testAlreadyInvitedPeopleAreSkipped() {
@@ -143,6 +233,47 @@ final class FriendInviteTests: XCTestCase {
         XCTAssertTrue(fromContacts.hasUsableContactInfo)
         XCTAssertNil(PickedContact(name: "New Person").resolvedContact())
         XCTAssertFalse(PickedContact(name: "New Person").hasUsableContactInfo)
+    }
+
+    func testMultiplePhoneNumbersRequireAChoice() {
+        let contact = PickedContact(
+            name: "Alex",
+            phone: "",
+            phones: ["(555) 111-2222", "555-333-4444"]
+        )
+        XCTAssertTrue(contact.needsContactChoice)
+        XCTAssertEqual(contact.uniquePhones.count, 2)
+        let chosen = contact.selectingPhone("5553334444")
+        XCTAssertEqual(ContactUniqueness.phoneKey(chosen.phone), "5553334444")
+        XCTAssertEqual(chosen.phones, [chosen.phone])
+        XCTAssertFalse(chosen.needsContactChoice)
+    }
+
+    func testSelectingAPhoneKeepsASingleEmail() {
+        let contact = PickedContact(
+            name: "Blair",
+            email: "blair@example.com",
+            phones: ["5551112222", "5553334444"]
+        )
+        let chosen = contact.selectingPhone("5551112222")
+        XCTAssertEqual(chosen.email, "blair@example.com")
+        XCTAssertEqual(ContactUniqueness.phoneKey(chosen.phone), "5551112222")
+    }
+
+    func testEnteredEmailClearsSavedPhoneFromContactCard() {
+        var contact = PickedContact(
+            name: "Alex",
+            email: "",
+            phone: "(555) 111-2222",
+            phones: ["(555) 111-2222"]
+        )
+        contact.setEnteredContact(email: "alex@gmail.com", phone: "")
+        XCTAssertEqual(contact.email, "alex@gmail.com")
+        XCTAssertEqual(contact.phone, "")
+        XCTAssertEqual(contact.phones, [])
+        let resolved = contact.resolvedContact()
+        XCTAssertEqual(resolved?.email, "alex@gmail.com")
+        XCTAssertNil(ContactUniqueness.phoneKey(resolved?.phone ?? ""))
     }
 
     func testEnteredPhoneStaysOnTheContactCard() {
@@ -190,6 +321,48 @@ final class KnownFriendsStoreTests: XCTestCase {
         let saved = KnownFriendsStore.contact(named: "Blair")
         XCTAssertEqual(ContactUniqueness.phoneKey(saved?.phone ?? ""), "5553334444")
         XCTAssertNotNil(saved?.resolvedContact())
+    }
+}
+
+final class FriendContactInputTests: XCTestCase {
+    func testLettersAreNotWipedAsPhoneFormatting() {
+        XCTAssertFalse(looksLikePhoneTyping("pat"))
+        XCTAssertFalse(looksLikePhoneTyping("pat@example.com"))
+        XCTAssertTrue(looksLikePhoneTyping("555"))
+        XCTAssertTrue(looksLikePhoneTyping("(555) 123"))
+    }
+
+    func testGmailValidatesLikeOtherEmailScreens() {
+        var entry = ContactEntryState()
+        entry.kind = .email
+        entry.email = "name@gmail.com"
+        XCTAssertTrue(isValidEmail(entry.email))
+        XCTAssertTrue(entry.isValid)
+        XCTAssertNil(entry.hint)
+
+        entry.email = "name@gmail"
+        XCTAssertFalse(entry.isValid)
+        XCTAssertEqual(entry.hint, "Enter a valid email address.")
+    }
+
+    func testSavedEmailReplacesTypedLetters() {
+        let change = resolvedEmailFieldChange(
+            current: "pra",
+            replacement: "pramela@gmail.com",
+            range: NSRange(location: 3, length: 0)
+        )
+        XCTAssertEqual(change.text, "pramela@gmail.com")
+        XCTAssertEqual(change.cursorUTF16Offset, "pramela@gmail.com".utf16.count)
+    }
+
+    func testDeletingALetterKeepsCursorInPlace() {
+        let change = resolvedEmailFieldChange(
+            current: "name@gmail.com",
+            replacement: "",
+            range: NSRange(location: 2, length: 1)
+        )
+        XCTAssertEqual(change.text, "nae@gmail.com")
+        XCTAssertEqual(change.cursorUTF16Offset, 2)
     }
 }
 

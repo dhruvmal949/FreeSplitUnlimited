@@ -35,53 +35,128 @@ enum ContactAuthorization {
     }
 }
 
-/// Apple's contact picker. It does not need Full Access — the user can hand over one contact.
+/// Apple's contact picker. Presented with UIKit so it does not dismiss the Add friends sheet.
 struct SystemContactPicker: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
     var onPick: (PickedContact) -> Void
     var onCancel: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick, onCancel: onCancel)
+        Coordinator(isPresented: $isPresented, onPick: onPick, onCancel: onCancel)
     }
 
-    func makeUIViewController(context: Context) -> CNContactPickerViewController {
-        let picker = CNContactPickerViewController()
-        picker.delegate = context.coordinator
-        picker.displayedPropertyKeys = [
-            CNContactGivenNameKey,
-            CNContactMiddleNameKey,
-            CNContactFamilyNameKey,
-            CNContactOrganizationNameKey,
-            CNContactEmailAddressesKey,
-            CNContactPhoneNumbersKey
-        ]
-        return picker
+    func makeUIViewController(context: Context) -> UIViewController {
+        context.coordinator.host
     }
 
-    func updateUIViewController(_ uiViewController: CNContactPickerViewController, context: Context) {
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        context.coordinator.isPresented = $isPresented
         context.coordinator.onPick = onPick
         context.coordinator.onCancel = onCancel
+        if isPresented {
+            context.coordinator.presentIfNeeded()
+        }
     }
 
     final class Coordinator: NSObject, CNContactPickerDelegate {
+        let host = UIViewController()
+        var isPresented: Binding<Bool>
         var onPick: (PickedContact) -> Void
         var onCancel: () -> Void
+        private var isShowingPicker = false
 
-        init(onPick: @escaping (PickedContact) -> Void, onCancel: @escaping () -> Void) {
+        init(
+            isPresented: Binding<Bool>,
+            onPick: @escaping (PickedContact) -> Void,
+            onCancel: @escaping () -> Void
+        ) {
+            self.isPresented = isPresented
             self.onPick = onPick
             self.onCancel = onCancel
         }
 
-        func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
-            if let picked = PickedContact(contact: contact) {
-                onPick(picked)
-            } else {
-                onCancel()
+        func presentIfNeeded() {
+            guard isPresented.wrappedValue, !isShowingPicker else { return }
+            guard let presenter = presentationAnchor() else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.presentIfNeeded()
+                }
+                return
+            }
+            let picker = CNContactPickerViewController()
+            picker.delegate = self
+            picker.displayedPropertyKeys = [
+                CNContactGivenNameKey,
+                CNContactMiddleNameKey,
+                CNContactFamilyNameKey,
+                CNContactOrganizationNameKey,
+                CNContactEmailAddressesKey,
+                CNContactPhoneNumbersKey
+            ]
+            picker.predicateForEnablingContact = NSPredicate(
+                format: "phoneNumbers.@count > 0 OR emailAddresses.@count > 0"
+            )
+            picker.predicateForSelectionOfProperty = NSPredicate(
+                format: "key == %@ OR key == %@",
+                CNContactPhoneNumbersKey,
+                CNContactEmailAddressesKey
+            )
+            isShowingPicker = true
+            presenter.present(picker, animated: true)
+        }
+
+        private func presentationAnchor() -> UIViewController? {
+            var current: UIViewController? = host
+            while let parent = current?.parent {
+                current = parent
+            }
+            guard let current, current.view.window != nil else { return nil }
+            return current
+        }
+
+        private func finishPresented() {
+            isShowingPicker = false
+            DispatchQueue.main.async {
+                self.isPresented.wrappedValue = false
+            }
+        }
+
+        func contactPicker(_ picker: CNContactPickerViewController, didSelect contactProperty: CNContactProperty) {
+            finishPresented()
+            let picked = Self.pickedContact(from: contactProperty)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                if let picked {
+                    self.onPick(picked)
+                } else {
+                    self.onCancel()
+                }
             }
         }
 
         func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
-            onCancel()
+            finishPresented()
+            DispatchQueue.main.async { self.onCancel() }
+        }
+
+        private static func pickedContact(from property: CNContactProperty) -> PickedContact? {
+            guard let picked = PickedContact(contact: property.contact) else { return nil }
+            switch property.key {
+            case CNContactPhoneNumbersKey:
+                guard let phone = (property.value as? CNPhoneNumber)?.stringValue else { return picked.resolvedContact() ?? picked }
+                return picked.selectingPhone(phone)
+            case CNContactEmailAddressesKey:
+                let email: String
+                if let value = property.value as? String {
+                    email = value
+                } else if let value = property.value as? NSString {
+                    email = value as String
+                } else {
+                    return picked.resolvedContact() ?? picked
+                }
+                return picked.selectingEmail(email)
+            default:
+                return picked.resolvedContact() ?? picked
+            }
         }
     }
 }
@@ -109,7 +184,41 @@ struct PickedContact: Identifiable, Hashable {
     }
 
     var needsContactChoice: Bool {
-        emails.count > 1 || phones.count > 1
+        uniquePhones.count > 1 || uniqueEmails.count > 1
+    }
+
+    var uniquePhones: [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for raw in [phone] + phones {
+            guard let key = ContactUniqueness.phoneKey(raw), seen.insert(key).inserted else { continue }
+            result.append(raw)
+        }
+        return result
+    }
+
+    var uniqueEmails: [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for raw in [email] + emails {
+            guard let key = ContactUniqueness.emailKey(raw), seen.insert(key).inserted else { continue }
+            result.append(raw)
+        }
+        return result
+    }
+
+    func selectingPhone(_ raw: String) -> PickedContact {
+        var next = self
+        let keptEmail = uniqueEmails.count == 1 ? uniqueEmails[0] : ""
+        next.setEnteredContact(email: keptEmail, phone: raw)
+        return next
+    }
+
+    func selectingEmail(_ raw: String) -> PickedContact {
+        var next = self
+        let keptPhone = uniquePhones.count == 1 ? uniquePhones[0] : ""
+        next.setEnteredContact(email: raw, phone: keptPhone)
+        return next
     }
 
     /// True when this person already has a usable phone or email, so we should not open the add-phone screen.
@@ -158,7 +267,8 @@ struct PickedContact: Identifiable, Hashable {
     mutating func setEnteredContact(email: String, phone: String) {
         self.email = email.trimmingCharacters(in: .whitespacesAndNewlines)
         self.phone = phone.trimmingCharacters(in: .whitespacesAndNewlines)
-        syncContactLists()
+        emails = self.email.isEmpty ? [] : [self.email]
+        phones = self.phone.isEmpty ? [] : [self.phone]
     }
 
     private mutating func syncContactLists() {
@@ -366,6 +476,55 @@ struct FriendSearchBar: View {
     }
 }
 
+struct ContactNumberChoiceView: View {
+    let contact: PickedContact
+    var onCancel: () -> Void
+    var onChoose: (PickedContact) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if !contact.uniquePhones.isEmpty {
+                    Section("Phone numbers") {
+                        ForEach(contact.uniquePhones, id: \.self) { phone in
+                            Button {
+                                onChoose(contact.selectingPhone(phone))
+                            } label: {
+                                Text(formattedUSPhone(phone))
+                                    .foregroundStyle(.primary)
+                            }
+                            .accessibilityIdentifier("chooseContactPhone")
+                        }
+                    }
+                }
+                if !contact.uniqueEmails.isEmpty {
+                    Section("Emails") {
+                        ForEach(contact.uniqueEmails, id: \.self) { email in
+                            Button {
+                                onChoose(contact.selectingEmail(email))
+                            } label: {
+                                Text(email)
+                                    .foregroundStyle(.primary)
+                            }
+                            .accessibilityIdentifier("chooseContactEmail")
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle(contact.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { onCancel() }
+                }
+            }
+        }
+        .presentationDetents(contact.uniquePhones.count + contact.uniqueEmails.count > 4 ? [.medium, .large] : [.medium])
+        .tint(AppTheme.teal)
+    }
+}
+
 /// Search Contacts (if allowed) or saved friends. "Me" is added to the group in the background, not shown here.
 struct FriendSearchPicker: View {
     let contactsAllowed: Bool
@@ -384,6 +543,7 @@ struct FriendSearchPicker: View {
     @State private var friendToRemove: PickedContact?
     @State private var pendingAdd: PickedContact?
     @State private var detailsContact: PickedContact?
+    @State private var numberChoiceContact: PickedContact?
     @State private var duplicateWarning: String?
     @State private var showingSystemPicker = false
     @FocusState private var searchFocused: Bool
@@ -456,6 +616,10 @@ struct FriendSearchPicker: View {
                 || $0.name.localizedCaseInsensitiveCompare(friend.name) == .orderedSame
         }
         guard !alreadySelected else { return }
+        if friend.needsContactChoice {
+            numberChoiceContact = friend
+            return
+        }
         if let ready = friend.resolvedContact() {
             commitAdd(ready)
             return
@@ -633,17 +797,28 @@ struct FriendSearchPicker: View {
                 usingContacts = true
                 onContactsAccessGranted()
             }
-            .sheet(isPresented: $showingSystemPicker) {
+            .background {
                 SystemContactPicker(
+                    isPresented: $showingSystemPicker,
                     onPick: { contact in
-                        showingSystemPicker = false
                         requestAdd(contact)
                     },
                     onCancel: {
                         showingSystemPicker = false
                     }
                 )
-                .ignoresSafeArea()
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+            }
+            .sheet(item: $numberChoiceContact) { friend in
+                ContactNumberChoiceView(
+                    contact: friend,
+                    onCancel: { numberChoiceContact = nil },
+                    onChoose: { chosen in
+                        numberChoiceContact = nil
+                        commitAdd(chosen)
+                    }
+                )
             }
             .confirmationDialog(
                 confirmationTitle,
@@ -691,6 +866,7 @@ struct FriendSearchPicker: View {
                         }
                     )
                 }
+                .ignoresSafeArea(.keyboard)
                 .tint(AppTheme.teal)
             }
             .alert("Number already used", isPresented: Binding(

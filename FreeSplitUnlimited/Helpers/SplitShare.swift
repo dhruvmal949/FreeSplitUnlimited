@@ -85,10 +85,16 @@ enum SplitShare {
 
     static func activityPayload(for occasion: Occasion) async -> ActivitySharePayload {
         let file = try? temporaryFileURL(for: occasion)
-        let store = ShareLink.appStoreURL
+        let link: URL
+        if let package = try? makePackage(from: occasion),
+           let published = try? await ShareLink.publish(package, groupName: occasion.name) {
+            link = published
+        } else {
+            link = ShareLink.appStoreURL
+        }
         return ActivitySharePayload(
-            message: SplitShareText.inviteMessage(groupName: occasion.name, link: store),
-            link: store,
+            message: SplitShareText.inviteMessage(groupName: occasion.name, link: link),
+            link: link,
             fileURL: file,
             fileTitle: occasion.name.isEmpty ? "Split" : occasion.name
         )
@@ -374,6 +380,17 @@ final class IncomingSplitOpener {
     static let shared = IncomingSplitOpener()
     private var context: ModelContext?
     private var isFlushing = false
+    private(set) var pendingOpenID: UUID?
+
+    func consumePendingOpen() -> UUID? {
+        let id = pendingOpenID
+        pendingOpenID = nil
+        return id
+    }
+
+    func restorePendingOpen(_ id: UUID) {
+        pendingOpenID = id
+    }
 
     func attach(context: ModelContext) {
         self.context = context
@@ -421,6 +438,7 @@ final class IncomingSplitOpener {
             }
             do {
                 let occasion = try SplitShare.importFile(at: url, into: context)
+                pendingOpenID = occasion.id
                 NotificationCenter.default.post(name: .freeSplitDidImport, object: occasion.id)
             } catch {
                 NotificationCenter.default.post(
@@ -438,6 +456,7 @@ final class IncomingSplitOpener {
         do {
             let data = try await ShareLink.downloadPayload(id: id)
             let occasion = try SplitShare.importData(data, into: context)
+            pendingOpenID = occasion.id
             NotificationCenter.default.post(name: .freeSplitDidImport, object: occasion.id)
         } catch {
             NotificationCenter.default.post(
@@ -504,7 +523,11 @@ enum SplitShareText {
         let group = name.isEmpty ? "my group" : "my group '\(name)'"
         var lines = ["Hey friends! Join \(group) on Free Split."]
         if let link {
-            lines.append("Don't have Free Split? Get it on the App Store: \(link.absoluteString)")
+            if link.host?.contains("apps.apple.com") == true {
+                lines.append("Don't have Free Split? Get it on the App Store: \(link.absoluteString)")
+            } else {
+                lines.append("Tap this link to open the split. If you don't have Free Split, it takes you to the App Store: \(link.absoluteString)")
+            }
         }
         return lines.joined(separator: "\n")
     }
