@@ -89,6 +89,46 @@ struct BackupExpense: Codable {
     var paidByID: UUID?
     var participantIDs: [UUID]
     var shares: [BackupShare]
+    var note: String
+
+    init(
+        id: UUID,
+        title: String,
+        amount: String,
+        date: Date,
+        splitMethodRaw: String,
+        paidByID: UUID?,
+        participantIDs: [UUID],
+        shares: [BackupShare],
+        note: String = ""
+    ) {
+        self.id = id
+        self.title = title
+        self.amount = amount
+        self.date = date
+        self.splitMethodRaw = splitMethodRaw
+        self.paidByID = paidByID
+        self.participantIDs = participantIDs
+        self.shares = shares
+        self.note = note
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, amount, date, splitMethodRaw, paidByID, participantIDs, shares, note
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        amount = try container.decode(String.self, forKey: .amount)
+        date = try container.decode(Date.self, forKey: .date)
+        splitMethodRaw = try container.decode(String.self, forKey: .splitMethodRaw)
+        paidByID = try container.decodeIfPresent(UUID.self, forKey: .paidByID)
+        participantIDs = try container.decode([UUID].self, forKey: .participantIDs)
+        shares = try container.decode([BackupShare].self, forKey: .shares)
+        note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
+    }
 }
 
 struct BackupShare: Codable {
@@ -257,7 +297,8 @@ enum SplitBackup {
                             personID: personID,
                             value: NSDecimalNumber(decimal: share.value).stringValue
                         )
-                    }
+                    },
+                    note: expense.note
                 )
             },
             ownerAccountID: occasion.ownerAccountID,
@@ -421,6 +462,7 @@ enum SplitBackup {
                 existing.splitMethod = method
                 existing.paidBy = backup.paidByID.flatMap { peopleByID[$0] }
                 existing.participants = participants
+                existing.note = backup.note
                 expense = existing
             } else {
                 expense = Expense(
@@ -431,6 +473,7 @@ enum SplitBackup {
                     paidBy: backup.paidByID.flatMap { peopleByID[$0] },
                     participants: participants,
                     shares: [],
+                    note: backup.note,
                     id: backup.id
                 )
                 expense.occasion = occasion
@@ -495,6 +538,7 @@ enum SplitBackup {
                 paidBy: expenseBackup.paidByID.flatMap { peopleByID[$0] },
                 participants: participants,
                 shares: [],
+                note: expenseBackup.note,
                 id: expenseBackup.id
             )
             expense.occasion = occasion

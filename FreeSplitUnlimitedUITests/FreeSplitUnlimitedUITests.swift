@@ -48,8 +48,10 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         tapTab(app, "Friends")
         XCTAssertTrue(app.staticTexts[friendName].waitForExistence(timeout: 5))
         tapRow(app, containing: friendName)
-        XCTAssertTrue(app.navigationBars[friendName].waitForExistence(timeout: 5))
-        tapRow(app, containing: friendName)
+        XCTAssertTrue(app.buttons["Back to friends"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[friendName].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["friendSharedGroup"].waitForExistence(timeout: 5))
+        app.buttons["friendSharedGroup"].tap()
         XCTAssertTrue(app.buttons["Add people"].waitForExistence(timeout: 5))
 
         addPerson(app, named: "Blair")
@@ -87,6 +89,64 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         XCTAssertTrue(app.buttons["loginSignInButton"].exists)
         XCTAssertFalse(app.buttons["loginGuestButton"].exists)
         XCTAssertFalse(app.buttons["Guest"].exists)
+    }
+
+    @MainActor
+    func testDeleteAsksBeforeRemovingGroupAndFriend() throws {
+        let app = launchApp()
+        allowSystemAlerts(app)
+        signInWithNewAccount(app)
+        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 8))
+
+        app.buttons["Create Group"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["New Group"].waitForExistence(timeout: 5))
+        let groupField = app.textFields["groupNameField"]
+        XCTAssertTrue(groupField.waitForExistence(timeout: 5))
+        groupField.tap()
+        groupField.typeText("Cabin Trip")
+        app.buttons["createGroupSubmit"].tap()
+        XCTAssertTrue(app.staticTexts["Cabin Trip"].waitForExistence(timeout: 6))
+
+        app.buttons["Group settings"].tap()
+        XCTAssertTrue(app.navigationBars["Group Settings"].waitForExistence(timeout: 5))
+        app.buttons["deleteGroupButton"].tap()
+
+        let groupAlert = app.alerts["Are you sure you want to delete?"]
+        XCTAssertTrue(groupAlert.waitForExistence(timeout: 4))
+        groupAlert.buttons["No"].tap()
+        XCTAssertTrue(app.navigationBars["Group Settings"].waitForExistence(timeout: 3))
+        XCTAssertFalse(groupAlert.waitForExistence(timeout: 1))
+
+        app.buttons["deleteGroupButton"].tap()
+        XCTAssertTrue(groupAlert.waitForExistence(timeout: 4))
+        groupAlert.buttons["Yes"].tap()
+        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 6))
+        XCTAssertFalse(app.staticTexts["Cabin Trip"].waitForExistence(timeout: 2))
+
+        tapTab(app, "Friends")
+        XCTAssertTrue(app.navigationBars["Friends"].waitForExistence(timeout: 5))
+        app.buttons["New Split"].tap()
+        XCTAssertTrue(app.navigationBars["New Split"].waitForExistence(timeout: 5))
+        let friendField = app.textFields["friendNameField"]
+        XCTAssertTrue(friendField.waitForExistence(timeout: 5))
+        friendField.tap()
+        friendField.typeText("Alex")
+        app.buttons["createSplitButton"].tap()
+        XCTAssertTrue(app.buttons["Group settings"].waitForExistence(timeout: 6))
+
+        app.buttons["Group settings"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        app.buttons["deleteGroupButton"].tap()
+        let friendAlert = app.alerts["Are you sure you want to delete?"]
+        XCTAssertTrue(friendAlert.waitForExistence(timeout: 4))
+        friendAlert.buttons["No"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 3))
+
+        app.buttons["deleteGroupButton"].tap()
+        XCTAssertTrue(friendAlert.waitForExistence(timeout: 4))
+        friendAlert.buttons["Yes"].tap()
+        XCTAssertTrue(app.navigationBars["Friends"].waitForExistence(timeout: 6))
+        XCTAssertFalse(app.staticTexts["Alex"].waitForExistence(timeout: 2))
     }
 
     @MainActor

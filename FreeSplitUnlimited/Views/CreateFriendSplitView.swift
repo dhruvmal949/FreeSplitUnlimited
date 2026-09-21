@@ -20,6 +20,7 @@ struct CreateFriendSplitView: View {
     @State private var inviteContacts: [PickedContact] = []
     @State private var pendingCreatedID: UUID?
     @State private var createdOccasion: Occasion?
+    @State private var isCreating = false
 
     private var trimmedFriendName: String {
         friendName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -74,7 +75,7 @@ struct CreateFriendSplitView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(AppTheme.teal)
-                    .disabled(!canCreate)
+                    .disabled(!canCreate || isCreating)
                     .accessibilityIdentifier("createSplitButton")
                     .padding(.top, 4)
                     .padding(.bottom, 12)
@@ -132,7 +133,8 @@ struct CreateFriendSplitView: View {
     }
 
     private func createSplit() {
-        guard canCreate else { return }
+        guard canCreate, !isCreating else { return }
+        isCreating = true
 
         let occasion = Occasion(
             name: trimmedFriendName,

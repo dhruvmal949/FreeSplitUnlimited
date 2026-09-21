@@ -94,22 +94,28 @@ final class FriendInviteTests: XCTestCase {
         XCTAssertTrue(payloads[0].body.contains("apps.apple.com"))
     }
 
-    func testPayloadsSendsOneEmailPerAddress() {
+    func testPayloadsPutsEveryEmailOnOneMail() {
+        let alexID = UUID()
+        let blairID = UUID()
         let payloads = FriendInvite.payloads(
             for: [
-                PickedContact(name: "Alex", email: "alex@example.com"),
-                PickedContact(name: "Blair", email: "blair@example.com")
+                PickedContact(name: "Alex", email: "alex@example.com", personID: alexID),
+                PickedContact(name: "Blair", email: "blair@example.com", personID: blairID)
             ],
-            splitName: "Safari"
+            splitName: "Safari",
+            senderEmail: "me@gmail.com"
         )
-        XCTAssertEqual(payloads.map(\.recipients), [["alex@example.com"], ["blair@example.com"]])
-        XCTAssertTrue(payloads[0].body.contains("Email: alex@example.com"))
-        XCTAssertTrue(payloads[1].body.contains("Email: blair@example.com"))
-        XCTAssertFalse(payloads[0].body.contains("blair@example.com"))
+        XCTAssertEqual(payloads.count, 1)
+        XCTAssertFalse(payloads[0].isPhoneInvite)
+        XCTAssertEqual(payloads[0].recipients, ["alex@example.com", "blair@example.com"])
+        XCTAssertEqual(payloads[0].personIDs, [alexID, blairID])
+        XCTAssertTrue(payloads[0].body.contains("Email: me@gmail.com"))
+        XCTAssertFalse(payloads[0].body.contains("Email: alex@example.com"))
+        XCTAssertEqual(payloads[0].subject, "Join my split on Free Split")
     }
 
     func testInviteMessageUsesJoinLinkWhenProvided() {
-        let join = URL(string: "https://paste.rs/abc123.html")!
+        let join = URL(string: "https://paste.rs/abc123.md")!
         let payloads = FriendInvite.payloads(
             for: [PickedContact(name: "Alex", phone: "5551112222")],
             splitName: "Cabin",
@@ -120,6 +126,12 @@ final class FriendInviteTests: XCTestCase {
         XCTAssertTrue(payloads[0].body.contains("Tap this link"))
         XCTAssertFalse(payloads[0].body.contains("apps.apple.com"))
         XCTAssertFalse(payloads[0].body.contains("freesplit://"))
+        XCTAssertEqual(payloads[0].body.components(separatedBy: "https://").count - 1, 1)
+        XCTAssertFalse(payloads[0].body.hasSuffix(join.absoluteString))
+        XCTAssertFalse(
+            payloads[0].body.contains("\nhttps://"),
+            "URL must stay on the same line so iMessage does not split it into two bubbles"
+        )
     }
 
     func testPayloadsIncludesEmailOnlyPeopleSeparately() {
@@ -128,16 +140,18 @@ final class FriendInviteTests: XCTestCase {
                 PickedContact(name: "Alex", phone: "5551112222"),
                 PickedContact(name: "Casey", email: "casey@example.com")
             ],
-            splitName: "Trip"
+            splitName: "Trip",
+            senderEmail: "me@gmail.com"
         )
 
         XCTAssertEqual(payloads.count, 2)
         XCTAssertEqual(payloads[0].recipients, ["+15551112222"])
         XCTAssertTrue(payloads[0].isPhoneInvite)
+        XCTAssertFalse(payloads[0].body.contains("@"))
         XCTAssertEqual(payloads[1].recipients, ["casey@example.com"])
         XCTAssertFalse(payloads[1].isPhoneInvite)
-        XCTAssertTrue(payloads[1].body.contains("Email: casey@example.com"))
-        XCTAssertFalse(payloads[0].body.contains("@"))
+        XCTAssertTrue(payloads[1].body.contains("Email: me@gmail.com"))
+        XCTAssertFalse(payloads[1].body.contains("Email: casey@example.com"))
     }
 
     func testPayloadsSendsEmailEvenWhenThePersonAlsoHasAPhone() {
@@ -146,23 +160,36 @@ final class FriendInviteTests: XCTestCase {
             splitName: "Trip"
         )
         XCTAssertEqual(payloads.map(\.recipients), [["+15551112222"], ["casey@example.com"]])
-        XCTAssertTrue(payloads[1].body.contains("casey@example.com"))
+        XCTAssertEqual(payloads[1].recipients, ["casey@example.com"])
         XCTAssertFalse(payloads[0].body.contains("casey@example.com"))
     }
 
     func testEmailInviteBodyMentionsAddressAndShortLink() {
-        let join = URL(string: "https://paste.rs/abc123.html")!
+        let join = URL(string: "https://paste.rs/abc123.md")!
         let payloads = FriendInvite.payloads(
             for: [PickedContact(name: "Casey", email: "casey@example.com")],
             splitName: "Safari",
-            joinURL: join
+            joinURL: join,
+            senderEmail: "me@gmail.com"
         )
         XCTAssertEqual(payloads.count, 1)
         XCTAssertFalse(payloads[0].isPhoneInvite)
-        XCTAssertTrue(payloads[0].body.contains("Email: casey@example.com"))
+        XCTAssertEqual(payloads[0].recipients, ["casey@example.com"])
+        XCTAssertTrue(payloads[0].body.contains("Email: me@gmail.com"))
+        XCTAssertFalse(payloads[0].body.contains("Email: casey@example.com"))
         XCTAssertTrue(payloads[0].body.contains(join.absoluteString))
         XCTAssertFalse(payloads[0].body.contains("apps.apple.com"))
         XCTAssertFalse(payloads[0].body.contains("freesplit://"))
+    }
+
+    func testInviteStillSendsWhenFriendUsesTheSignedInEmail() {
+        let payloads = FriendInvite.payloads(
+            for: [PickedContact(name: "Casey", email: "me@gmail.com")],
+            splitName: "Safari",
+            senderEmail: "me@gmail.com"
+        )
+        XCTAssertEqual(payloads[0].recipients, ["me@gmail.com"])
+        XCTAssertTrue(payloads[0].body.contains("Email: me@gmail.com"))
     }
 
     func testMailAndGmailFallbacksStayAvailableTogether() {
@@ -172,7 +199,8 @@ final class FriendInviteTests: XCTestCase {
             subject: "Join my split on Free Split"
         )
         let urls = FriendInvite.emailFallbackURLs(for: payload)
-        XCTAssertEqual(urls.map(\.scheme), ["mailto", "googlegmail"])
+        XCTAssertTrue(urls.contains { $0.scheme == "mailto" })
+        XCTAssertTrue(urls.contains { $0.scheme == "googlegmail" })
         XCTAssertTrue(urls.contains { $0.absoluteString.contains("casey@example.com") })
     }
 
@@ -188,6 +216,21 @@ final class FriendInviteTests: XCTestCase {
         XCTAssertTrue(url?.absoluteString.contains("subject=") == true)
     }
 
+    func testMailURLKeepsJoinLinkInTheBody() {
+        let join = "https://telegra.ph/Join-Austin-on-Free-Split-09-21"
+        let body = "I added you to 'Austin' on Free Split. Email: casey@example.com Tap this link to open the split \(join) in Free Split."
+        let url = FriendInvite.mailURL(
+            to: "casey@example.com",
+            subject: "Join my split on Free Split",
+            body: body
+        )
+        XCTAssertNotNil(url)
+        XCTAssertEqual(url?.scheme, "mailto")
+        XCTAssertTrue(url?.absoluteString.contains("casey@example.com") == true)
+        XCTAssertTrue(url?.absoluteString.contains("Join-Austin-on-Free-Split") == true)
+        XCTAssertTrue(url?.absoluteString.contains("body=") == true)
+    }
+
     func testGmailFallbackURLIncludesRecipient() {
         let url = FriendInvite.gmailURL(
             to: ["name@gmail.com"],
@@ -196,6 +239,14 @@ final class FriendInviteTests: XCTestCase {
         )
         XCTAssertEqual(url?.scheme, "googlegmail")
         XCTAssertTrue(url?.absoluteString.contains("name@gmail.com") == true)
+        XCTAssertTrue(url?.absoluteString.contains(":///co?") == true)
+    }
+
+    func testCompactMailBodyKeepsShortInvitesIntact() {
+        let short = "I added you to 'Trip' on Free Split."
+        XCTAssertEqual(FriendInvite.compactMailBody(short), short)
+        let long = String(repeating: "x", count: 400)
+        XCTAssertEqual(FriendInvite.compactMailBody(long).count, 280)
     }
 
     func testAlreadyInvitedPeopleAreSkipped() {

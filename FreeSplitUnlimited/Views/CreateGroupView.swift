@@ -26,6 +26,7 @@ struct CreateGroupView: View {
     @State private var inviteContacts: [PickedContact] = []
     @State private var pendingCreatedID: UUID?
     @State private var createdOccasion: Occasion?
+    @State private var isCreating = false
 
     init(onCreated: @escaping (UUID) -> Void = { _ in }) {
         self.onCreated = onCreated
@@ -58,7 +59,7 @@ struct CreateGroupView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(AppTheme.teal)
-                    .disabled(!canCreate)
+                    .disabled(isCreating)
                     .accessibilityIdentifier("createGroupSubmit")
                     .padding(.top, 4)
                     .padding(.bottom, 12)
@@ -309,7 +310,8 @@ struct CreateGroupView: View {
     }
 
     private func createGroup() {
-        guard canCreate else { return }
+        guard canCreate, !isCreating else { return }
+        isCreating = true
 
         let occasion = Occasion(
             name: trimmedName,

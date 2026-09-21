@@ -14,6 +14,8 @@ final class Expense {
     var amount: Decimal = 0
     var date: Date = Date.now
     var splitMethodRaw: String = SplitMethod.equal.rawValue
+    /// How the payment was settled (Venmo, cash, etc.). Empty for regular expenses.
+    var note: String = ""
     var occasion: Occasion?
     var paidBy: Person?
     var participants: [Person] = []
@@ -43,6 +45,7 @@ final class Expense {
         paidBy: Person? = nil,
         participants: [Person] = [],
         shares: [ExpenseShare] = [],
+        note: String = "",
         id: UUID = UUID()
     ) {
         self.id = id
@@ -53,6 +56,7 @@ final class Expense {
         self.paidBy = paidBy
         self.participants = Self.deduplicated(participants)
         self.shares = shares
+        self.note = note
     }
 
     /// How much each participant owes for this expense. Shares always add up to `amount`.

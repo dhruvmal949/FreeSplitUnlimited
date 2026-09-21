@@ -15,7 +15,7 @@ struct GroupSettingsView: View {
     @State private var name = ""
     @State private var note = ""
     @State private var kind: GroupKind = .other
-    @State private var confirmDelete = false
+    @State private var showingDeleteConfirm = false
     @State private var personToRemove: Person?
     @State private var inviteContacts: [PickedContact] = []
 
@@ -75,25 +75,15 @@ struct GroupSettingsView: View {
                 }
 
                 Section {
-                    if confirmDelete {
-                        Button("Delete Group", role: .destructive) {
-                            deleteGroup()
-                        }
-                        .accessibilityIdentifier("deleteGroupButton")
-                        Button("Cancel") {
-                            confirmDelete = false
-                        }
-                    } else {
-                        Button("Delete Group", role: .destructive) {
-                            confirmDelete = true
-                        }
-                        .accessibilityIdentifier("deleteGroupButton")
+                    Button("Delete", role: .destructive) {
+                        showingDeleteConfirm = true
                     }
+                    .accessibilityIdentifier("deleteGroupButton")
                 }
             }
             .freeSplitListStyle()
             .freeSplitBackground()
-            .navigationTitle("Group Settings")
+            .navigationTitle(occasion.isOneToOne ? "Settings" : "Group Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -136,6 +126,16 @@ struct GroupSettingsView: View {
             } message: {
                 Text("They will be removed from this split.")
             }
+            .alert("Are you sure you want to delete?", isPresented: $showingDeleteConfirm) {
+                Button("No", role: .cancel) {}
+                Button("Yes", role: .destructive) { deleteGroup() }
+            } message: {
+                Text(
+                    occasion.isOneToOne
+                        ? "This friend split will be removed from Friends."
+                        : "This group will be removed from Groups."
+                )
+            }
         }
         .tint(AppTheme.teal)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -154,8 +154,13 @@ struct GroupSettingsView: View {
     }
 
     private func deleteGroup() {
-        DeletedGroupsStore.remember(occasion.id, notify: false)
-        NotificationCenter.default.post(name: .freeSplitJumpToHome, object: nil)
+        let goToGroups = occasion.appearsInGroups
+        modelContext.removeGroup(occasion)
+        SyncCoordinator.shared.syncNow()
+        NotificationCenter.default.post(
+            name: .freeSplitJumpToHome,
+            object: goToGroups ? 1 : 0
+        )
     }
 
     private func notifyBinding(for person: Person) -> Binding<Bool> {

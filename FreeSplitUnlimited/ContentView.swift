@@ -32,17 +32,17 @@ struct ContentView: View {
             }
         }
         .animation(nil, value: settingsGroupID)
-        .environment(\.popToHome, {
-            jumpToHome()
-        })
+            .environment(\.popToHome, {
+                jumpToHome(tab: 1)
+            })
         .tint(AppTheme.teal)
         .safeAreaInset(edge: .bottom) {
             if settingsGroupID == nil {
                 MainTabBar(selectedTab: selectedTab, onSelect: selectTab)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .freeSplitJumpToHome)) { _ in
-            jumpToHome()
+        .onReceive(NotificationCenter.default.publisher(for: .freeSplitJumpToHome)) { note in
+            jumpToHome(tab: note.object as? Int ?? 1)
         }
         .onReceive(NotificationCenter.default.publisher(for: .freeSplitDidImport)) { _ in
             guard let id = IncomingSplitOpener.shared.pendingOpenID else { return }
@@ -76,11 +76,11 @@ struct ContentView: View {
         }
     }
 
-    private func jumpToHome() {
+    private func jumpToHome(tab: Int = 1) {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            selectedTab = 1
+            selectedTab = tab
             navigationEpoch = UUID()
         }
         DispatchQueue.main.async {
