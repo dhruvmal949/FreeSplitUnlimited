@@ -161,6 +161,7 @@ private struct RootView: View {
             }
         }
         .freeSplitBackground()
+        .preferredColorScheme(.light)
         .modelContainer(container)
         .onAppear {
             if !AppLaunchFlags.isUITesting {
