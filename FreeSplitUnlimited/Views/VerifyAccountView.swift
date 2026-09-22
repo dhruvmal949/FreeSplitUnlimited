@@ -125,7 +125,11 @@ struct VerifyAccountView: View {
         case .email:
             if MFMailComposeViewController.canSendMail() {
                 mailPayload = payload
-            } else if let url = mailURL(to: pending.contact, body: payload.body) {
+            } else if let url = FriendInvite.mailURL(
+                to: pending.contact,
+                subject: payload.subject,
+                body: payload.body
+            ) {
                 UIApplication.shared.open(url)
             } else {
                 errorMessage = "Set up Mail to send the code, then enter it here."
@@ -141,15 +145,5 @@ struct VerifyAccountView: View {
         }
     }
 
-    private func mailURL(to email: String, body: String) -> URL? {
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = email
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: "Free Split confirmation code"),
-            URLQueryItem(name: "body", value: body)
-        ]
-        return components.url
-    }
 }
 

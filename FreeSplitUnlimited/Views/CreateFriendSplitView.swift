@@ -20,6 +20,7 @@ struct CreateFriendSplitView: View {
     @State private var inviteContacts: [PickedContact] = []
     @State private var pendingCreatedID: UUID?
     @State private var createdOccasion: Occasion?
+    @State private var isCreating = false
 
     private var trimmedFriendName: String {
         friendName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -74,7 +75,7 @@ struct CreateFriendSplitView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(AppTheme.teal)
-                    .disabled(!canCreate)
+                    .disabled(!canCreate || isCreating)
                     .accessibilityIdentifier("createSplitButton")
                     .padding(.top, 4)
                     .padding(.bottom, 12)
@@ -108,6 +109,7 @@ struct CreateFriendSplitView: View {
         .friendInvite(
             contacts: $inviteContacts,
             splitName: trimmedFriendName,
+            occasion: createdOccasion,
             onSent: markInviteSent,
             onFinished: finishCreateIfNeeded
         )
@@ -131,7 +133,8 @@ struct CreateFriendSplitView: View {
     }
 
     private func createSplit() {
-        guard canCreate else { return }
+        guard canCreate, !isCreating else { return }
+        isCreating = true
 
         let occasion = Occasion(
             name: trimmedFriendName,
@@ -161,7 +164,9 @@ struct CreateFriendSplitView: View {
             personID: friend?.id
         )
         if FriendInvite.needsInvite(inviteContact) {
-            inviteContacts = [inviteContact]
+            DispatchQueue.main.async {
+                inviteContacts = [inviteContact]
+            }
         } else {
             finishCreateIfNeeded()
         }

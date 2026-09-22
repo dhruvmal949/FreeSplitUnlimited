@@ -20,7 +20,7 @@ struct EmailAddressField: UIViewRepresentable {
         let field = UITextField()
         field.placeholder = "Email address"
         field.keyboardType = .emailAddress
-        field.textContentType = .username
+        field.textContentType = .emailAddress
         field.autocorrectionType = .no
         field.autocapitalizationType = .none
         field.spellCheckingType = .no
@@ -36,29 +36,48 @@ struct EmailAddressField: UIViewRepresentable {
         field.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
         field.setContentHuggingPriority(.defaultLow, for: .horizontal)
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.setContentHuggingPriority(.required, for: .vertical)
+        field.setContentCompressionResistancePriority(.required, for: .vertical)
+        field.inputAssistantItem.leadingBarButtonGroups = []
+        field.inputAssistantItem.trailingBarButtonGroups = []
         return field
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextField, context: Context) -> CGSize? {
+        let width = proposal.width ?? uiView.intrinsicContentSize.width
+        return CGSize(width: width, height: uiView.intrinsicContentSize.height)
     }
 
     func updateUIView(_ uiView: UITextField, context: Context) {
         context.coordinator.text = $text
-        let constrained = constrainedEmailInput(text, previous: text)
-        if uiView.text != constrained {
-            uiView.text = constrained
-        }
-        if text != constrained {
-            DispatchQueue.main.async {
-                self.text = constrained
+        if !uiView.isFirstResponder {
+            let constrained = constrainedEmailInput(text, previous: text)
+            if uiView.text != constrained {
+                uiView.text = constrained
+            }
+            if text != constrained {
+                DispatchQueue.main.async {
+                    self.text = constrained
+                }
             }
         }
         uiView.isUserInteractionEnabled = isActive
-        uiView.textContentType = isActive ? .username : nil
-        uiView.keyboardType = .emailAddress
+        let nextContent: UITextContentType? = isActive ? .emailAddress : nil
+        if uiView.textContentType != nextContent {
+            uiView.textContentType = nextContent
+        }
+        if uiView.keyboardType != .emailAddress {
+            uiView.keyboardType = .emailAddress
+        }
         syncFocus(uiView, coordinator: context.coordinator)
     }
 
     private func syncFocus(_ uiView: UITextField, coordinator: Coordinator) {
         coordinator.wantsFocus = isFocused && isActive
         coordinator.isActive = isActive
+        let shouldResign = !isActive && uiView.isFirstResponder
+        let shouldFocus = coordinator.wantsFocus && !uiView.isFirstResponder
+        guard shouldResign || shouldFocus else { return }
         DispatchQueue.main.async {
             if !coordinator.isActive {
                 if uiView.isFirstResponder {
@@ -76,6 +95,7 @@ struct EmailAddressField: UIViewRepresentable {
         var text: Binding<String>
         var wantsFocus = false
         var isActive = true
+        private var isApplyingText = false
 
         init(text: Binding<String>) {
             self.text = text
@@ -83,22 +103,34 @@ struct EmailAddressField: UIViewRepresentable {
 
         func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
             let current = textField.text ?? ""
-            guard let typedRange = Range(range, in: current) else { return false }
-            let next = current.replacingCharacters(in: typedRange, with: string)
-            let constrained = constrainedEmailInput(next, previous: current)
-            textField.text = constrained
-            text.wrappedValue = constrained
+            let change = resolvedEmailFieldChange(current: current, replacement: string, range: range)
+            apply(change.text, to: textField, cursorOffset: change.cursorUTF16Offset)
             return false
         }
 
         @objc func editingChanged(_ textField: UITextField) {
-            let constrained = constrainedEmailInput(textField.text ?? "", previous: text.wrappedValue)
-            if textField.text != constrained {
-                textField.text = constrained
+            guard !isApplyingText else { return }
+            let current = textField.text ?? ""
+            let constrained = constrainedEmailInput(current, previous: text.wrappedValue)
+            let cursor = textField.selectedTextRange.flatMap { range in
+                textField.offset(from: textField.beginningOfDocument, to: range.start)
+            } ?? (constrained as NSString).length
+            apply(constrained, to: textField, cursorOffset: cursor)
+        }
+
+        private func apply(_ newText: String, to textField: UITextField, cursorOffset: Int) {
+            isApplyingText = true
+            if textField.text != newText {
+                textField.text = newText
             }
-            if text.wrappedValue != constrained {
-                text.wrappedValue = constrained
+            let clamped = max(0, min(cursorOffset, (newText as NSString).length))
+            if let position = textField.position(from: textField.beginningOfDocument, offset: clamped) {
+                textField.selectedTextRange = textField.textRange(from: position, to: position)
             }
+            if text.wrappedValue != newText {
+                text.wrappedValue = newText
+            }
+            isApplyingText = false
         }
     }
 }
@@ -109,6 +141,27 @@ private let lockedEmailTLDs: Set<String> = [
     "xyz", "io", "ai", "me", "us", "uk", "in", "ca", "au", "de", "fr", "es", "it",
     "nl", "jp", "kr", "br", "mx", "nz"
 ]
+
+func resolvedEmailFieldChange(current: String, replacement: String, range: NSRange) -> (text: String, cursorUTF16Offset: Int) {
+    let trimmedReplacement = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+    let replaceAll = isValidEmail(trimmedReplacement)
+    let nextRaw: String
+    if replaceAll {
+        nextRaw = trimmedReplacement
+    } else {
+        nextRaw = (current as NSString).replacingCharacters(in: range, with: replacement)
+    }
+    let constrained = constrainedEmailInput(nextRaw, previous: current)
+    let cursor: Int
+    if replaceAll {
+        cursor = (constrained as NSString).length
+    } else if replacement.isEmpty {
+        cursor = min(range.location, (constrained as NSString).length)
+    } else {
+        cursor = min(range.location + (replacement as NSString).length, (constrained as NSString).length)
+    }
+    return (constrained, cursor)
+}
 
 func constrainedEmailInput(_ raw: String, previous: String) -> String {
     let sanitized = sanitizedEmailInput(raw)

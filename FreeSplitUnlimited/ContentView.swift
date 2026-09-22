@@ -32,17 +32,22 @@ struct ContentView: View {
             }
         }
         .animation(nil, value: settingsGroupID)
-        .environment(\.popToHome, {
-            jumpToHome()
-        })
+            .environment(\.popToHome, {
+                jumpToHome(tab: 1)
+            })
         .tint(AppTheme.teal)
         .safeAreaInset(edge: .bottom) {
             if settingsGroupID == nil {
                 MainTabBar(selectedTab: selectedTab, onSelect: selectTab)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .freeSplitJumpToHome)) { _ in
-            jumpToHome()
+        .onReceive(NotificationCenter.default.publisher(for: .freeSplitJumpToHome)) { note in
+            jumpToHome(tab: note.object as? Int ?? 1)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .freeSplitDidImport)) { _ in
+            guard let id = IncomingSplitOpener.shared.pendingOpenID else { return }
+            let isFriendSplit = allOccasions.first(where: { $0.id == id })?.appearsInGroups == false
+            selectedTab = isFriendSplit ? 0 : 1
         }
         .onReceive(NotificationCenter.default.publisher(for: .freeSplitOpenGroupSettings)) { note in
             settingsGroupID = note.object as? UUID
@@ -71,11 +76,11 @@ struct ContentView: View {
         }
     }
 
-    private func jumpToHome() {
+    private func jumpToHome(tab: Int = 1) {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            selectedTab = 1
+            selectedTab = tab
             navigationEpoch = UUID()
         }
         DispatchQueue.main.async {
@@ -277,6 +282,7 @@ private struct GroupsView: View {
             DispatchQueue.main.async {
                 persistHiddenGroups()
             }
+            openImportedSplitIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: .freeSplitDidHideGroups)) { _ in
             hiddenGroupIDs = DeletedGroupsStore.ids()
@@ -323,13 +329,16 @@ private struct GroupsView: View {
             )
         }
         .onReceive(NotificationCenter.default.publisher(for: .freeSplitDidImport)) { note in
+            if openImportedSplitIfNeeded() {
+                return
+            }
             if let id = note.object as? UUID,
                let name = occasions.first(where: { $0.id == id })?.name {
                 statusMessage = StatusMessage(
                     title: "Split Imported",
                     message: "\"\(name)\" is ready on this phone."
                 )
-            } else {
+            } else if IncomingSplitOpener.shared.pendingOpenID == nil {
                 statusMessage = StatusMessage(
                     title: "Split Imported",
                     message: "The split is ready on this phone."
@@ -341,6 +350,16 @@ private struct GroupsView: View {
                 ?? "Couldn't open this split file."
             statusMessage = StatusMessage(title: "Import Failed", message: message)
         }
+    }
+
+    private func openImportedSplitIfNeeded() -> Bool {
+        guard let id = IncomingSplitOpener.shared.pendingOpenID else { return false }
+        guard let occasion = occasions.first(where: { $0.id == id }), occasion.appearsInGroups else {
+            return false
+        }
+        IncomingSplitOpener.shared.consumePendingOpen()
+        openedGroupID = OpenedGroup(id: id)
+        return true
     }
 
     private func openNewSplit() {

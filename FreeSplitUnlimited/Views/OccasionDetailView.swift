@@ -11,6 +11,7 @@ struct OccasionDetailView: View {
     @Bindable var occasion: Occasion
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var session = AuthSession.shared
 
     @State private var showingAddExpense = false
     @State private var showingAddMember = false
@@ -25,6 +26,7 @@ struct OccasionDetailView: View {
     @State private var inviteContacts: [PickedContact] = []
     @State private var pendingInviteContacts: [PickedContact] = []
     @State private var personToRemove: Person?
+    @State private var paymentToRecord: PendingGroupPayment?
     @FocusState private var nameFieldFocused: Bool
 
     private var sortedExpenses: [Expense] {
@@ -44,6 +46,10 @@ struct OccasionDetailView: View {
 
     private var isAlone: Bool {
         occasion.uniqueMembers.count < 2
+    }
+
+    private var myNames: [String] {
+        session.selfNames
     }
 
     var body: some View {
@@ -103,6 +109,15 @@ struct OccasionDetailView: View {
             .padding(.bottom, 8)
         }
         .avoidsMainTabBar()
+        .fullScreenCover(item: $paymentToRecord) { payment in
+            RecordPaymentView(
+                payerName: payment.payerName,
+                receiverName: payment.receiverName,
+                amount: payment.amount,
+                occasions: [occasion],
+                myNames: myNames
+            )
+        }
         .sheet(isPresented: $showingAddExpense) {
             AddExpenseView(occasion: occasion)
         }
@@ -139,6 +154,7 @@ struct OccasionDetailView: View {
         .friendInvite(
             contacts: $inviteContacts,
             splitName: occasion.displayName,
+            occasion: occasion,
             onSent: markInviteSent
         )
         .alert("Name this group", isPresented: $showingRenameGroup) {
@@ -278,6 +294,9 @@ struct OccasionDetailView: View {
     private func pill(_ title: String, tag: Int) -> some View {
         Button {
             selectedTab = tag
+            if tag == 1 {
+                presentSettlePaymentIfNeeded()
+            }
         } label: {
             Text(title)
                 .font(.subheadline.weight(.semibold))
@@ -420,12 +439,26 @@ struct OccasionDetailView: View {
                         .listRowBackground(Color.white.opacity(0.78))
                 } else {
                     ForEach(settlements) { settlement in
-                        HStack(alignment: .firstTextBaseline) {
-                            Text("\(settlement.from.name) → \(settlement.to.name)")
-                            Spacer()
-                            Text(CurrencyFormat.string(from: settlement.amount))
-                                .fontWeight(.semibold)
+                        Button {
+                            paymentToRecord = PendingGroupPayment(
+                                payerName: settlement.from.name,
+                                receiverName: settlement.to.name,
+                                amount: settlement.amount
+                            )
+                        } label: {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text("\(settlement.from.name) → \(settlement.to.name)")
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                Text(CurrencyFormat.string(from: settlement.amount))
+                                    .fontWeight(.semibold)
+                                    .foregroundStyle(.primary)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
+                        .buttonStyle(.plain)
                         .listRowBackground(Color.white.opacity(0.78))
                     }
                 }
@@ -579,6 +612,36 @@ struct OccasionDetailView: View {
         AppTheme.balanceColor(for: net)
     }
 
+    private func presentSettlePaymentIfNeeded() {
+        if let settlement = settlements.first(where: { settlement in
+            myNames.contains { FriendPairing.namesMatch($0, settlement.from.name) }
+                || myNames.contains { FriendPairing.namesMatch($0, settlement.to.name) }
+        }) ?? settlements.first, settlement.amount > 0 {
+            paymentToRecord = PendingGroupPayment(
+                payerName: settlement.from.name,
+                receiverName: settlement.to.name,
+                amount: settlement.amount
+            )
+            return
+        }
+
+        let me = occasion.uniqueMembers.first { member in
+            myNames.contains { FriendPairing.namesMatch($0, member.name) }
+        }
+        let other = occasion.uniqueMembers.first { member in
+            !myNames.contains { FriendPairing.namesMatch($0, member.name) }
+        }
+        paymentToRecord = PendingGroupPayment(
+            payerName: me?.name ?? "You",
+            receiverName: other?.name ?? settledFallbackName,
+            amount: 0
+        )
+    }
+
+    private var settledFallbackName: String {
+        occasion.uniqueMembers.first { FriendPairing.isUsableName($0.name) }?.name ?? "Friend"
+    }
+
     private func deleteExpenses(at offsets: IndexSet) {
         for index in offsets {
             modelContext.delete(sortedExpenses[index])
@@ -625,6 +688,13 @@ private struct WaveShape: Shape {
     }
 }
 
+private struct PendingGroupPayment: Identifiable {
+    let id = UUID()
+    let payerName: String
+    let receiverName: String
+    let amount: Decimal
+}
+
 private struct ExpenseRowView: View {
     let expense: Expense
 
@@ -644,6 +714,12 @@ private struct ExpenseRowView: View {
                 Text("Paid by \(expense.paidBy?.name ?? "Unknown")")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+
+                if !expense.note.isEmpty {
+                    Text(expense.note)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
 
                 if !expense.uniqueParticipants.isEmpty {
                     Text(expense.splitSummary)

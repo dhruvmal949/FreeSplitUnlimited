@@ -9,6 +9,7 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
     }
 
     @MainActor
@@ -16,8 +17,8 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         let app = launchApp()
         allowSystemAlerts(app)
 
-        continueAsGuest(app)
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 5))
+        signInWithNewAccount(app)
+        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 8))
 
         // Friends + creates a one-person split, not a group.
         tapTab(app, "Friends")
@@ -47,8 +48,10 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         tapTab(app, "Friends")
         XCTAssertTrue(app.staticTexts[friendName].waitForExistence(timeout: 5))
         tapRow(app, containing: friendName)
-        XCTAssertTrue(app.navigationBars[friendName].waitForExistence(timeout: 5))
-        tapRow(app, containing: friendName)
+        XCTAssertTrue(app.buttons["Back to friends"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[friendName].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["friendSharedGroup"].waitForExistence(timeout: 5))
+        app.buttons["friendSharedGroup"].tap()
         XCTAssertTrue(app.buttons["Add people"].waitForExistence(timeout: 5))
 
         addPerson(app, named: "Blair")
@@ -78,14 +81,72 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
 
         tapTab(app, "Settings")
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Guest"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["Sign Out"].waitForExistence(timeout: 4))
         app.buttons["Sign Out"].tap()
 
         XCTAssertTrue(app.textFields["loginEmailField"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.textFields["loginEmailField"].waitForExistence(timeout: 4))
         XCTAssertTrue(app.secureTextFields["loginPasswordField"].exists)
         XCTAssertTrue(app.buttons["loginSignInButton"].exists)
-        XCTAssertTrue(app.buttons["loginGuestButton"].exists)
+        XCTAssertFalse(app.buttons["loginGuestButton"].exists)
+        XCTAssertFalse(app.buttons["Guest"].exists)
+    }
+
+    @MainActor
+    func testDeleteAsksBeforeRemovingGroupAndFriend() throws {
+        let app = launchApp()
+        allowSystemAlerts(app)
+        signInWithNewAccount(app)
+        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 8))
+
+        app.buttons["Create Group"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["New Group"].waitForExistence(timeout: 5))
+        let groupField = app.textFields["groupNameField"]
+        XCTAssertTrue(groupField.waitForExistence(timeout: 5))
+        groupField.tap()
+        groupField.typeText("Cabin Trip")
+        app.buttons["createGroupSubmit"].tap()
+        XCTAssertTrue(app.staticTexts["Cabin Trip"].waitForExistence(timeout: 6))
+
+        app.buttons["Group settings"].tap()
+        XCTAssertTrue(app.navigationBars["Group Settings"].waitForExistence(timeout: 5))
+        app.buttons["deleteGroupButton"].tap()
+
+        let groupAlert = app.alerts["Are you sure you want to delete?"]
+        XCTAssertTrue(groupAlert.waitForExistence(timeout: 4))
+        groupAlert.buttons["No"].tap()
+        XCTAssertTrue(app.navigationBars["Group Settings"].waitForExistence(timeout: 3))
+        XCTAssertFalse(groupAlert.waitForExistence(timeout: 1))
+
+        app.buttons["deleteGroupButton"].tap()
+        XCTAssertTrue(groupAlert.waitForExistence(timeout: 4))
+        groupAlert.buttons["Yes"].tap()
+        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 6))
+        XCTAssertFalse(app.staticTexts["Cabin Trip"].waitForExistence(timeout: 2))
+
+        tapTab(app, "Friends")
+        XCTAssertTrue(app.navigationBars["Friends"].waitForExistence(timeout: 5))
+        app.buttons["New Split"].tap()
+        XCTAssertTrue(app.navigationBars["New Split"].waitForExistence(timeout: 5))
+        let friendField = app.textFields["friendNameField"]
+        XCTAssertTrue(friendField.waitForExistence(timeout: 5))
+        friendField.tap()
+        friendField.typeText("Alex")
+        app.buttons["createSplitButton"].tap()
+        XCTAssertTrue(app.buttons["Group settings"].waitForExistence(timeout: 6))
+
+        app.buttons["Group settings"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+        app.buttons["deleteGroupButton"].tap()
+        let friendAlert = app.alerts["Are you sure you want to delete?"]
+        XCTAssertTrue(friendAlert.waitForExistence(timeout: 4))
+        friendAlert.buttons["No"].tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 3))
+
+        app.buttons["deleteGroupButton"].tap()
+        XCTAssertTrue(friendAlert.waitForExistence(timeout: 4))
+        friendAlert.buttons["Yes"].tap()
+        XCTAssertTrue(app.navigationBars["Friends"].waitForExistence(timeout: 6))
+        XCTAssertFalse(app.staticTexts["Alex"].waitForExistence(timeout: 2))
     }
 
     @MainActor
@@ -109,10 +170,65 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
     }
 
     @MainActor
-    private func continueAsGuest(_ app: XCUIApplication) {
-        let guest = app.buttons["Guest"]
-        XCTAssertTrue(guest.waitForExistence(timeout: 8), "Login screen should show Guest")
-        guest.tap()
+    private func signInWithNewAccount(_ app: XCUIApplication) {
+        let email = "e2e.\(Int(Date().timeIntervalSince1970))@example.com"
+        let createAccount = app.buttons["loginCreateAccount"].firstMatch
+        XCTAssertTrue(createAccount.waitForExistence(timeout: 8))
+        if !createAccount.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(createAccount.waitForExistence(timeout: 2))
+        createAccount.tap()
+        XCTAssertTrue(app.navigationBars["New Account"].waitForExistence(timeout: 5))
+
+        type(app.textFields["createFirstNameField"], "Pat")
+        type(app.textFields["createLastNameField"], "Lee")
+        type(app.textFields["createContactField"], email)
+        tapKeyboardDone(app)
+        type(app.secureTextFields["createPasswordField"], "secret1")
+        type(app.secureTextFields["createConfirmPasswordField"], "secret1")
+        tapKeyboardDone(app)
+        let save = app.buttons["createSaveButton"]
+        XCTAssertTrue(save.waitForExistence(timeout: 3))
+        let enabled = NSPredicate(format: "isEnabled == true")
+        XCTAssertTrue(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: enabled, object: save)], timeout: 4) == .completed)
+        save.tap()
+
+        XCTAssertTrue(app.textFields["loginEmailField"].waitForExistence(timeout: 6))
+        setText(app.secureTextFields["loginPasswordField"], "secret1")
+        tapKeyboardDone(app)
+        app.buttons["loginSignInButton"].tap()
+    }
+
+    @MainActor
+    private func type(_ field: XCUIElement, _ text: String) {
+        setText(field, text)
+    }
+
+    @MainActor
+    private func setText(_ field: XCUIElement, _ text: String) {
+        let app = XCUIApplication()
+        tapKeyboardDone(app)
+        XCTAssertTrue(field.waitForExistence(timeout: 4))
+        field.tap()
+        if app.keyboards.count == 0 {
+            field.tap()
+        }
+        if let current = field.value as? String,
+           !current.isEmpty,
+           current != field.placeholderValue {
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count + 4))
+        }
+        field.typeText(text)
+    }
+
+    @MainActor
+    private func tapKeyboardDone(_ app: XCUIApplication) {
+        let done = app.buttons["keyboardDone"]
+        if done.waitForExistence(timeout: 1), done.isHittable {
+            done.tap()
+        }
     }
 
     @MainActor
@@ -149,6 +265,11 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
             app.buttons["Save Expense"].tap()
         } else {
             app.buttons["Add"].tap()
+        }
+
+        let saveAnyway = app.alerts.buttons["Save Anyway"]
+        if saveAnyway.waitForExistence(timeout: 3) {
+            saveAnyway.tap()
         }
     }
 

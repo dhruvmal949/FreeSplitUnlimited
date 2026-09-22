@@ -58,7 +58,6 @@ struct FreeSplitUnlimitedApp: App {
                 )
             }
         }
-        .handlesExternalEvents(matching: [])
     }
 
     /// Never traps. Disk store → reset disk → in-memory. Nil only if SwiftData is completely unusable.
@@ -162,6 +161,7 @@ private struct RootView: View {
             }
         }
         .freeSplitBackground()
+        .preferredColorScheme(.light)
         .modelContainer(container)
         .onAppear {
             if !AppLaunchFlags.isUITesting {

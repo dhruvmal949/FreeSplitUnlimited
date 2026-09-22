@@ -26,6 +26,7 @@ struct CreateGroupView: View {
     @State private var inviteContacts: [PickedContact] = []
     @State private var pendingCreatedID: UUID?
     @State private var createdOccasion: Occasion?
+    @State private var isCreating = false
 
     init(onCreated: @escaping (UUID) -> Void = { _ in }) {
         self.onCreated = onCreated
@@ -58,7 +59,7 @@ struct CreateGroupView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(AppTheme.teal)
-                    .disabled(!canCreate)
+                    .disabled(isCreating)
                     .accessibilityIdentifier("createGroupSubmit")
                     .padding(.top, 4)
                     .padding(.bottom, 12)
@@ -108,6 +109,7 @@ struct CreateGroupView: View {
         .friendInvite(
             contacts: $inviteContacts,
             splitName: trimmedName.isEmpty ? "Untitled group" : trimmedName,
+            occasion: createdOccasion,
             onSent: markInviteSent,
             onFinished: finishCreateIfNeeded
         )
@@ -155,10 +157,6 @@ struct CreateGroupView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(Color.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                Text("You can leave this blank and name the group later.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
 
                 TextField("Short note (optional)", text: $note)
                     .font(.subheadline)
@@ -312,7 +310,8 @@ struct CreateGroupView: View {
     }
 
     private func createGroup() {
-        guard canCreate else { return }
+        guard canCreate, !isCreating else { return }
+        isCreating = true
 
         let occasion = Occasion(
             name: trimmedName,
@@ -355,7 +354,9 @@ struct CreateGroupView: View {
             )
         }
         if invitees.contains(where: { FriendInvite.needsInvite($0) }) {
-            inviteContacts = invitees
+            DispatchQueue.main.async {
+                inviteContacts = invitees
+            }
         } else {
             finishCreateIfNeeded()
         }

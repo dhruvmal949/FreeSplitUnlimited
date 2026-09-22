@@ -111,23 +111,6 @@ struct LoginView: View {
                             .accessibilityIdentifier("loginForgotPassword")
                         }
 
-                        HStack {
-                            Spacer()
-                            Button {
-                                errorMessage = session.logIn(username: contact.selectedValue, password: password)
-                            } label: {
-                                Text("Sign In")
-                                    .font(.subheadline.weight(.semibold))
-                                    .padding(.horizontal, 18)
-                                    .padding(.vertical, 8)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(AppTheme.teal)
-                            .disabled(!canLogIn)
-                            .accessibilityIdentifier("loginSignInButton")
-                            Spacer()
-                        }
-
                         if let errorMessage {
                             Text(errorMessage)
                                 .font(.footnote)
@@ -137,17 +120,18 @@ struct LoginView: View {
                         }
 
                         Button {
-                            session.continueAsGuest()
+                            errorMessage = session.logIn(username: contact.selectedValue, password: password)
                         } label: {
-                            Text("Continue as Guest")
-                                .font(.subheadline.weight(.semibold))
+                            Text("Sign In")
+                                .font(.headline)
                                 .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
+                                .padding(.vertical, 14)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.borderedProminent)
                         .tint(AppTheme.teal)
-                        .accessibilityLabel("Guest")
-                        .accessibilityIdentifier("loginGuestButton")
+                        .disabled(!canLogIn)
+                        .padding(.top, 4)
+                        .accessibilityIdentifier("loginSignInButton")
                     }
                     .padding(.horizontal, 24)
                     .onChange(of: contact.email) { _, _ in
@@ -163,7 +147,7 @@ struct LoginView: View {
                         saveRememberedIfNeeded()
                     }
 
-                    VStack(spacing: 12) {
+                    VStack(spacing: 14) {
                         HStack {
                             Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
                             Text("or sign in with")
@@ -175,8 +159,8 @@ struct LoginView: View {
                         SocialAuthButtons(googleTitle: "Google")
                     }
                     .padding(.horizontal, 24)
-                    .padding(.top, 8)
-                    .padding(.bottom, 28)
+                    .padding(.top, 4)
+                    .padding(.bottom, 32)
 
                     Spacer(minLength: 8)
                 }

@@ -81,7 +81,7 @@ enum BalanceCalculator {
             myNames.contains { $0.localizedCaseInsensitiveCompare(name) == .orderedSame }
         }
 
-        var net: [String: Decimal] = [:]
+        var totals: [String: Decimal] = [:]
         var displayName: [String: String] = [:]
         var occasionIDs: [String: [UUID]] = [:]
         var occasionNames: [String: [String]] = [:]
@@ -90,23 +90,11 @@ enum BalanceCalculator {
             for member in occasion.uniqueMembers where !isMe(member.name) {
                 let key = member.name.lowercased()
                 displayName[key] = member.name
-                net[key, default: 0] += 0
                 if occasionIDs[key]?.contains(occasion.id) != true {
                     occasionIDs[key, default: []].append(occasion.id)
                     occasionNames[key, default: []].append(occasion.name)
                 }
-            }
-
-            for settlement in settlements(for: occasion) {
-                if isMe(settlement.from.name), !isMe(settlement.to.name) {
-                    let key = settlement.to.name.lowercased()
-                    displayName[key] = settlement.to.name
-                    net[key, default: 0] -= settlement.amount
-                } else if isMe(settlement.to.name), !isMe(settlement.from.name) {
-                    let key = settlement.from.name.lowercased()
-                    displayName[key] = settlement.from.name
-                    net[key, default: 0] += settlement.amount
-                }
+                totals[key, default: 0] += net(withFriend: member.name, in: occasion, myNames: myNames)
             }
         }
 
@@ -114,7 +102,7 @@ enum BalanceCalculator {
             FriendSummary(
                 id: key,
                 name: displayName[key] ?? key,
-                net: net[key] ?? 0,
+                net: totals[key] ?? 0,
                 occasionIDs: occasionIDs[key] ?? [],
                 occasionNames: occasionNames[key] ?? []
             )
@@ -122,7 +110,128 @@ enum BalanceCalculator {
         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    /// Positive = others owe you in this group; negative = you owe others.
+    /// Positive = this friend owes you in the group; negative = you owe them.
+    static func net(
+        withFriend friendName: String,
+        in occasion: Occasion,
+        myNames: [String] = ["Me"]
+    ) -> Decimal {
+        func isMe(_ name: String) -> Bool {
+            myNames.contains { FriendPairing.namesMatch($0, name) }
+        }
+
+        var total: Decimal = 0
+        for expense in occasion.expenses {
+            guard let payer = expense.paidBy else { continue }
+            let owed = expense.owedAmounts()
+            let friendShare = occasion.uniqueMembers
+                .filter { FriendPairing.namesMatch($0.name, friendName) }
+                .reduce(Decimal.zero) { $0 + (owed[$1.id] ?? 0) }
+            let myShare = occasion.uniqueMembers
+                .filter { isMe($0.name) }
+                .reduce(Decimal.zero) { $0 + (owed[$1.id] ?? 0) }
+
+            if isMe(payer.name), friendShare > 0 {
+                total += friendShare
+            } else if FriendPairing.namesMatch(payer.name, friendName), myShare > 0 {
+                total -= myShare
+            }
+        }
+        return MoneySplit.cents(total)
+    }
+
+    /// Records a 1:1 cash payment between you and a friend. `friendPaidYou` means they paid you.
+    @discardableResult
+    static func recordFriendPayment(
+        amount: Decimal,
+        friendPaidYou: Bool,
+        friendName: String,
+        myNames: [String] = ["Me"],
+        occasions: [Occasion],
+        note: String = ""
+    ) -> [Expense] {
+        var remaining = MoneySplit.cents(amount)
+        guard remaining > 0 else { return [] }
+
+        func me(in occasion: Occasion) -> Person? {
+            occasion.uniqueMembers.first { member in
+                myNames.contains { FriendPairing.namesMatch($0, member.name) }
+            }
+        }
+        func friend(in occasion: Occasion) -> Person? {
+            occasion.uniqueMembers.first { FriendPairing.namesMatch($0.name, friendName) }
+        }
+
+        let ranked = occasions.compactMap { occasion -> (Occasion, Decimal)? in
+            let groupNet = net(withFriend: friendName, in: occasion, myNames: myNames)
+            if friendPaidYou, groupNet > 0 { return (occasion, groupNet) }
+            if !friendPaidYou, groupNet < 0 { return (occasion, groupNet) }
+            return nil
+        }
+        .sorted { abs($0.1) > abs($1.1) }
+
+        var created: [Expense] = []
+
+        func addPayment(to occasion: Occasion, amount: Decimal) {
+            let bill = MoneySplit.cents(amount)
+            guard bill > 0, let me = me(in: occasion), let friend = friend(in: occasion) else { return }
+            let payer = friendPaidYou ? friend : me
+            let receiver = friendPaidYou ? me : friend
+            let expense = Expense(
+                title: "Payment",
+                amount: bill,
+                splitMethod: .equal,
+                paidBy: payer,
+                participants: [receiver],
+                note: note
+            )
+            expense.occasion = occasion
+            occasion.expenses.append(expense)
+            occasion.touch()
+            created.append(expense)
+        }
+
+        for (occasion, groupNet) in ranked {
+            guard remaining > 0 else { break }
+            let slice = min(remaining, abs(groupNet))
+            addPayment(to: occasion, amount: slice)
+            remaining -= slice
+        }
+
+        if remaining > 0, let occasion = occasions.first(where: { me(in: $0) != nil && friend(in: $0) != nil }) {
+            addPayment(to: occasion, amount: remaining)
+        }
+        return created
+    }
+
+    /// Records that `payerName` paid `receiverName` inside one group.
+    @discardableResult
+    static func recordDirectedPayment(
+        amount: Decimal,
+        payerName: String,
+        receiverName: String,
+        in occasion: Occasion,
+        note: String = ""
+    ) -> Expense? {
+        let bill = MoneySplit.cents(amount)
+        guard bill > 0,
+              let payer = occasion.uniqueMembers.first(where: { FriendPairing.namesMatch($0.name, payerName) }),
+              let receiver = occasion.uniqueMembers.first(where: { FriendPairing.namesMatch($0.name, receiverName) }),
+              payer.id != receiver.id
+        else { return nil }
+        let expense = Expense(
+            title: "Payment",
+            amount: bill,
+            splitMethod: .equal,
+            paidBy: payer,
+            participants: [receiver],
+            note: note
+        )
+        expense.occasion = occasion
+        occasion.expenses.append(expense)
+        occasion.touch()
+        return expense
+    }
     static func myNet(in occasion: Occasion, myNames: [String] = ["Me"]) -> Decimal {
         balances(for: occasion).first { balance in
             myNames.contains { $0.localizedCaseInsensitiveCompare(balance.person.name) == .orderedSame }
@@ -145,13 +254,28 @@ enum BalanceCalculator {
             var seenExpenseIDs = Set<UUID>()
             for expense in occasion.expenses where seenExpenseIDs.insert(expense.id).inserted {
                 let payer = expense.paidBy?.name ?? "Someone"
+                let isPayment = expense.title.localizedCaseInsensitiveCompare("Payment") == .orderedSame
+                let counterpart = expense.uniqueParticipants.first(where: { $0.name != payer })?.name
+                    ?? occasion.name
+                let subtitle: String
+                if isPayment {
+                    if expense.note.isEmpty {
+                        subtitle = occasion.displayName
+                    } else {
+                        subtitle = "\(expense.note) · \(occasion.displayName)"
+                    }
+                } else {
+                    subtitle = "\(expense.title) · \(occasion.name)"
+                }
                 items.append(
                     ActivityEvent(
                         id: "paid-\(expense.id.uuidString)",
                         date: expense.date,
                         kind: .amountPaid,
-                        title: "\(payer) paid \(CurrencyFormat.string(from: expense.amount))",
-                        subtitle: "\(expense.title) · \(occasion.name)",
+                        title: isPayment
+                            ? "\(payer) settled \(CurrencyFormat.string(from: expense.amount)) with \(counterpart)"
+                            : "\(payer) paid \(CurrencyFormat.string(from: expense.amount))",
+                        subtitle: subtitle,
                         occasionID: occasion.id
                     )
                 )

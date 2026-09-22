@@ -28,6 +28,149 @@ final class FreeSplitUnlimitedTests: XCTestCase {
         XCTAssertEqual(balances.first { $0.person.name == "Blair" }?.net, -20)
     }
 
+    func testFriendNetAcrossAGroupMatchesWhoOwesWhom() throws {
+        let me = Person(name: "Me")
+        let alex = Person(name: "Alex")
+        let occasion = Occasion(name: "Cabin")
+        occasion.members = [me, alex]
+        occasion.expenses = [
+            Expense(
+                title: "Dinner",
+                amount: 40,
+                splitMethod: .equal,
+                paidBy: me,
+                participants: [me, alex]
+            )
+        ]
+
+        XCTAssertEqual(BalanceCalculator.net(withFriend: "Alex", in: occasion), 20)
+        XCTAssertEqual(
+            BalanceCalculator.net(withFriend: "Alex", in: occasion, myNames: ["Me", "Dhruv"]),
+            20
+        )
+        let summary = BalanceCalculator.friendSummaries(from: [occasion]).first { $0.name == "Alex" }
+        XCTAssertEqual(summary?.net, 20)
+    }
+
+    func testFriendSummaryAddsWhatTheyOweInEachGroup() throws {
+        let dinnerMe = Person(name: "Me")
+        let dinnerAlex = Person(name: "Alex")
+        let dinner = Occasion(name: "Ramp Reality")
+        dinner.members = [dinnerMe, dinnerAlex]
+        dinner.expenses = [
+            Expense(
+                title: "Taxi",
+                amount: 40,
+                splitMethod: .equal,
+                paidBy: dinnerMe,
+                participants: [dinnerMe, dinnerAlex]
+            )
+        ]
+
+        let partyMe = Person(name: "Me")
+        let partyAlex = Person(name: "Alex")
+        let party = Occasion(name: "New Year 2021")
+        party.members = [partyMe, partyAlex]
+        party.expenses = [
+            Expense(
+                title: "Snacks",
+                amount: 16,
+                splitMethod: .equal,
+                paidBy: partyAlex,
+                participants: [partyMe, partyAlex]
+            )
+        ]
+
+        XCTAssertEqual(BalanceCalculator.net(withFriend: "Alex", in: dinner, myNames: ["Me", "Pat"]), 20)
+        XCTAssertEqual(BalanceCalculator.net(withFriend: "Alex", in: party, myNames: ["Me", "Pat"]), -8)
+        let summary = BalanceCalculator.friendSummaries(from: [dinner, party], myNames: ["Me", "Pat"]).first { $0.name == "Alex" }
+        XCTAssertEqual(summary?.net, 12)
+    }
+
+    func testRecordingAPaymentSettlesWhatYouOweAFriend() throws {
+        let me = Person(name: "Me")
+        let alex = Person(name: "Alex")
+        let occasion = Occasion(name: "Colorado")
+        occasion.members = [me, alex]
+        occasion.expenses = [
+            Expense(
+                title: "Cabin",
+                amount: 40,
+                splitMethod: .equal,
+                paidBy: alex,
+                participants: [me, alex]
+            )
+        ]
+
+        XCTAssertEqual(BalanceCalculator.net(withFriend: "Alex", in: occasion), -20)
+        BalanceCalculator.recordFriendPayment(
+            amount: 20,
+            friendPaidYou: false,
+            friendName: "Alex",
+            occasions: [occasion],
+            note: "Venmo"
+        )
+        XCTAssertEqual(BalanceCalculator.net(withFriend: "Alex", in: occasion), 0)
+        XCTAssertEqual(occasion.expenses.last?.note, "Venmo")
+        let settlement = BalanceCalculator.activity(from: [occasion]).first {
+            $0.title.contains("settled")
+        }
+        XCTAssertEqual(settlement?.title.contains("Alex"), true)
+        XCTAssertEqual(settlement?.subtitle.contains("Venmo"), true)
+    }
+
+    func testRecordingAPaymentSettlesWhatAFriendOwesYou() throws {
+        let me = Person(name: "Me")
+        let alex = Person(name: "Alex")
+        let occasion = Occasion(name: "Safari")
+        occasion.members = [me, alex]
+        occasion.expenses = [
+            Expense(
+                title: "Tickets",
+                amount: 40,
+                splitMethod: .equal,
+                paidBy: me,
+                participants: [me, alex]
+            )
+        ]
+
+        XCTAssertEqual(BalanceCalculator.net(withFriend: "Alex", in: occasion), 20)
+        BalanceCalculator.recordFriendPayment(
+            amount: 20,
+            friendPaidYou: true,
+            friendName: "Alex",
+            occasions: [occasion]
+        )
+        XCTAssertEqual(BalanceCalculator.net(withFriend: "Alex", in: occasion), 0)
+    }
+
+    func testGroupSettlePaymentRecordsFromDebtorToCreditor() throws {
+        let me = Person(name: "Me")
+        let ramesh = Person(name: "Ramesh")
+        let occasion = Occasion(name: "KPMC Dining")
+        occasion.members = [me, ramesh]
+        occasion.expenses = [
+            Expense(
+                title: "Dinner",
+                amount: 40,
+                splitMethod: .equal,
+                paidBy: ramesh,
+                participants: [me, ramesh]
+            )
+        ]
+
+        XCTAssertEqual(BalanceCalculator.net(withFriend: "Ramesh", in: occasion), -20)
+        let payment = BalanceCalculator.recordDirectedPayment(
+            amount: 20,
+            payerName: "Me",
+            receiverName: "Ramesh",
+            in: occasion,
+            note: "Cash"
+        )
+        XCTAssertEqual(payment?.note, "Cash")
+        XCTAssertEqual(BalanceCalculator.net(withFriend: "Ramesh", in: occasion), 0)
+    }
+
     func testPercentageSplitBalances() throws {
         let occasion = Occasion(name: "Groceries")
         let mom = Person(name: "Mom")
@@ -110,6 +253,39 @@ final class FreeSplitUnlimitedTests: XCTestCase {
         XCTAssertEqual(decoded.occasion.members.first?.name, "Me")
     }
 
+    func testJoinPageOpensFreeSplitDeepLink() {
+        let html = JoinPage.html(payloadID: "abc123", groupName: "Cabin")
+        XCTAssertTrue(html.contains("href=\"freesplit://p/abc123\""))
+        XCTAssertTrue(html.contains("abc123"))
+        XCTAssertTrue(html.contains("Cabin"))
+        XCTAssertTrue(html.contains("apps.apple.com"))
+        XCTAssertTrue(html.contains("og:title\" content=\"Join Cabin on Free Split\""))
+        XCTAssertTrue(html.contains("og:site_name\" content=\"Free Split\""))
+        XCTAssertFalse(html.contains("location.href = store"))
+        XCTAssertFalse(html.contains("preventDefault"))
+        XCTAssertFalse(html.contains("Rocket Powered Pastebin"))
+        XCTAssertFalse(html.contains("paste.rs"))
+    }
+
+    func testJoinMarkdownRendersOpenAndStoreLinks() {
+        let markdown = JoinPage.markdown(payloadID: "abc123", groupName: "Safari")
+        XCTAssertTrue(markdown.contains("freesplit://p/abc123"))
+        XCTAssertTrue(markdown.contains("Join Safari on Free Split"))
+        XCTAssertTrue(markdown.contains("apps.apple.com"))
+        XCTAssertFalse(markdown.contains("<script"))
+    }
+
+    func testJoinPreviewTitleUsesSplitName() {
+        XCTAssertEqual(JoinPage.previewTitle(groupName: "Cabin"), "Join Cabin on Free Split")
+        XCTAssertEqual(JoinPage.previewTitle(groupName: "  "), "Join a split on Free Split")
+    }
+
+    func testPublishedJoinURLUsesMarkdownNotHighlightedHTML() throws {
+        let url = try ShareLink.publishedPageURL(pageID: "gDlm0")
+        XCTAssertEqual(url.pathExtension, "md")
+        XCTAssertFalse(url.absoluteString.hasSuffix(".html"))
+    }
+
     func testOneToOneSplitPromotesToGroupAtThreePeople() {
         let occasion = Occasion(name: "Alex", groupType: SplitKind.oneToOne)
         occasion.members = [Person(name: "Me"), Person(name: "Alex")]
@@ -147,6 +323,21 @@ final class FreeSplitUnlimitedTests: XCTestCase {
         XCTAssertFalse(occasion.shouldAppearInLists)
 
         occasion.isDeleted = false
+        XCTAssertTrue(DeletedGroupsStore.contains(occasion.id))
+        XCTAssertFalse(occasion.shouldAppearInLists)
+        DeletedGroupsStore.resetForTesting()
+    }
+
+    func testDeletedFriendSplitIsHiddenFromFriends() {
+        DeletedGroupsStore.resetForTesting()
+        let occasion = Occasion(name: "Alex", groupType: SplitKind.oneToOne)
+        occasion.members = [Person(name: "Me"), Person(name: "Alex")]
+        XCTAssertFalse(occasion.appearsInGroups)
+        XCTAssertTrue(occasion.shouldAppearInLists)
+
+        occasion.markDeleted()
+
+        XCTAssertTrue(occasion.isDeleted)
         XCTAssertTrue(DeletedGroupsStore.contains(occasion.id))
         XCTAssertFalse(occasion.shouldAppearInLists)
         DeletedGroupsStore.resetForTesting()

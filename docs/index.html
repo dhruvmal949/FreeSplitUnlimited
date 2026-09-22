@@ -6,7 +6,6 @@
   <title>Join on Free Split</title>
   <meta property="og:title" content="Join on Free Split">
   <meta property="og:description" content="Hey friends! Open this group in Free Split.">
-  <meta name="apple-itunes-app" content="app-argument=freesplit://">
   <style>
     body {
       margin: 0;
@@ -47,22 +46,16 @@
       text-decoration: none;
       padding: 10px;
     }
-    #missing { display: none; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1 id="title">Hey friends!</h1>
     <p id="subtitle">Join this group on Free Split.</p>
-    <a class="btn" id="open" href="#">Open in Free Split</a>
-    <div id="missing">
-      <p>Don't have Free Split yet? Download it, then tap the link again.</p>
-      <a class="store" id="store" href="https://apps.apple.com/search?term=Free%20Split%20Unlimited">Get Free Split on the App Store</a>
-    </div>
+    <a class="btn" id="open" href="freesplit://">Open in Free Split</a>
+    <a class="store" id="store" href="https://apps.apple.com/search?term=Free%20Split%20Unlimited">Don't have the app? Get it on the App Store</a>
   </div>
   <script>
-    // If Free Split is installed, `freesplit://` opens it.
-    // If it is not, Safari stays here and we send the user to the App Store.
     (function () {
       var APP_STORE = "https://apps.apple.com/search?term=Free%20Split%20Unlimited";
       var params = new URLSearchParams(location.search);
@@ -76,36 +69,11 @@
         document.title = "Join " + name + " on Free Split";
       }
       var deep = "freesplit://p/" + encodeURIComponent(id);
-      var open = document.getElementById("open");
-      var store = document.getElementById("store");
-      var missing = document.getElementById("missing");
-      open.href = deep;
-      store.href = APP_STORE;
-
-      var leftPage = false;
-      document.addEventListener("visibilitychange", function () {
-        if (document.hidden) leftPage = true;
-      });
-
-      function tryOpenApp() {
-        if (!id) {
-          missing.style.display = "block";
-          return;
-        }
-        location.href = deep;
-        setTimeout(function () {
-          if (!leftPage && !document.hidden) {
-            missing.style.display = "block";
-            location.href = APP_STORE;
-          }
-        }, 1800);
+      document.getElementById("open").href = deep;
+      document.getElementById("store").href = APP_STORE;
+      if (id) {
+        window.location.href = deep;
       }
-
-      open.addEventListener("click", function (event) {
-        event.preventDefault();
-        tryOpenApp();
-      });
-      tryOpenApp();
     })();
   </script>
 </body>

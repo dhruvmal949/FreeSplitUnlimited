@@ -67,6 +67,9 @@
 		<string>cashme</string>
 		<string>squarecash</string>
 		<string>paypal</string>
+		<string>googlegmail</string>
+		<string>mailto</string>
+		<string>sms</string>
 	</array>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<false/>
