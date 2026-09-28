@@ -28,34 +28,9 @@ struct LoginView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    HStack(spacing: 12) {
-                        if session.hasUnlockableAccount {
-                            Button {
-                                Task {
-                                    errorMessage = await session.unlockWithFaceID()
-                                }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "faceid")
-                                    Text("Face ID")
-                                }
-                            }
-                            .buttonStyle(LoginCornerButtonStyle())
-                            .accessibilityLabel("Face ID")
-                            .accessibilityIdentifier("loginFaceIDButton")
-                        }
-
-                        Spacer(minLength: 8)
-
-                        Button("Create an account") {
-                            session.lastError = nil
-                            rememberedLoginWhenOpeningSheet = session.rememberedLogin
-                            showingCreateAccount = true
-                        }
-                        .buttonStyle(LoginCornerButtonStyle())
-                        .accessibilityIdentifier("loginCreateAccount")
+                    if AppLaunchFlags.passwordLoginEnabled {
+                        passwordLoginHeader
                     }
-                    .padding(.horizontal, 16)
 
                     VStack(spacing: 6) {
                         BrandLogoMark(size: 88)
@@ -64,101 +39,32 @@ struct LoginView: View {
                             .font(.largeTitle.weight(.bold))
                             .foregroundStyle(AppTheme.deepTeal)
                     }
+                    .padding(.top, AppLaunchFlags.passwordLoginEnabled ? 0 : 36)
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        EmailPhonePicker(
-                            entry: $contact,
-                            fieldIdentifier: "loginEmailField",
-                            pickerIdentifier: "loginContactKind",
-                            hintIdentifier: "loginContactHint",
-                            onKindChange: {
-                                errorMessage = nil
-                                beginManualLogin()
-                            }
-                        )
-
-                        PasswordField(title: "Password", text: $password, contentType: .password, fieldIdentifier: "loginPasswordField")
-
-                        HStack(alignment: .center) {
-                            Button {
-                                session.rememberMe.toggle()
-                                if session.rememberMe {
-                                    session.saveRememberedCredentials(login: contact.selectedValue, password: password)
-                                }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: session.rememberMe ? "checkmark.square.fill" : "square")
-                                        .font(.body)
-                                        .foregroundStyle(AppTheme.teal)
-                                    Text("Remember me")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.primary)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("loginRememberMe")
-                            .accessibilityLabel("Remember me")
-                            .accessibilityAddTraits(session.rememberMe ? [.isSelected] : [])
-
-                            Spacer(minLength: 8)
-
-                            Button("Forget Password") {
-                                session.lastError = nil
-                                rememberedLoginWhenOpeningSheet = session.rememberedLogin
-                                showingForgotPassword = true
-                            }
-                            .font(.subheadline.weight(.semibold))
-                            .accessibilityIdentifier("loginForgotPassword")
-                        }
-
-                        if let errorMessage {
-                            Text(errorMessage)
-                                .font(.footnote)
-                                .foregroundStyle(.red)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .accessibilityIdentifier("loginErrorLabel")
-                        }
-
-                        Button {
-                            errorMessage = session.logIn(username: contact.selectedValue, password: password)
-                        } label: {
-                            Text("Sign In")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(AppTheme.teal)
-                        .disabled(!canLogIn)
-                        .padding(.top, 4)
-                        .accessibilityIdentifier("loginSignInButton")
-                    }
-                    .padding(.horizontal, 24)
-                    .onChange(of: contact.email) { _, _ in
-                        beginManualLogin()
-                        saveRememberedIfNeeded()
-                    }
-                    .onChange(of: contact.phone) { _, _ in
-                        beginManualLogin()
-                        saveRememberedIfNeeded()
-                    }
-                    .onChange(of: password) { _, _ in
-                        beginManualLogin()
-                        saveRememberedIfNeeded()
+                    if AppLaunchFlags.passwordLoginEnabled {
+                        passwordLoginFields
                     }
 
                     VStack(spacing: 14) {
-                        HStack {
-                            Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
-                            Text("or sign in with")
-                                .font(.footnote.weight(.semibold))
+                        if AppLaunchFlags.passwordLoginEnabled {
+                            HStack {
+                                Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
+                                Text("or sign in with")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
+                            }
+                        } else {
+                            Text("Sign in to continue")
+                                .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.secondary)
-                            Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
                         }
 
-                        SocialAuthButtons(googleTitle: "Google")
+                        SocialAuthButtons()
                     }
                     .padding(.horizontal, 24)
+                    .frame(maxWidth: 480)
+                    .frame(maxWidth: .infinity)
                     .padding(.top, 4)
                     .padding(.bottom, 32)
 
@@ -173,7 +79,9 @@ struct LoginView: View {
             .sheet(isPresented: $showingCreateAccount, onDismiss: {
                 applyRememberedIfChanged()
             }) {
-                CreateAccountView()
+                if AppLaunchFlags.passwordLoginEnabled {
+                    CreateAccountView()
+                }
             }
             .sheet(isPresented: $showingForgotPassword, onDismiss: {
                 if applyRememberedIfChanged() {
@@ -181,7 +89,9 @@ struct LoginView: View {
                 }
                 errorMessage = nil
             }) {
-                ForgotPasswordView()
+                if AppLaunchFlags.passwordLoginEnabled {
+                    ForgotPasswordView()
+                }
             }
             .sheet(isPresented: $session.needsGoogleEmailConfirmation) {
                 GoogleEmailConfirmView()
@@ -217,6 +127,121 @@ struct LoginView: View {
         .tint(AppTheme.teal)
     }
 
+    private var passwordLoginHeader: some View {
+        HStack(spacing: 12) {
+            if session.hasUnlockableAccount {
+                Button {
+                    Task {
+                        errorMessage = await session.unlockWithFaceID()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "faceid")
+                        Text("Face ID")
+                    }
+                }
+                .buttonStyle(LoginCornerButtonStyle())
+                .accessibilityLabel("Face ID")
+                .accessibilityIdentifier("loginFaceIDButton")
+            }
+
+            Spacer(minLength: 8)
+
+            Button("Create an account") {
+                session.lastError = nil
+                rememberedLoginWhenOpeningSheet = session.rememberedLogin
+                showingCreateAccount = true
+            }
+            .buttonStyle(LoginCornerButtonStyle())
+            .accessibilityIdentifier("loginCreateAccount")
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var passwordLoginFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            EmailPhonePicker(
+                entry: $contact,
+                fieldIdentifier: "loginEmailField",
+                pickerIdentifier: "loginContactKind",
+                hintIdentifier: "loginContactHint",
+                onKindChange: {
+                    errorMessage = nil
+                    beginManualLogin()
+                }
+            )
+
+            PasswordField(title: "Password", text: $password, contentType: .password, fieldIdentifier: "loginPasswordField")
+
+            HStack(alignment: .center) {
+                Button {
+                    session.rememberMe.toggle()
+                    if session.rememberMe {
+                        session.saveRememberedCredentials(login: contact.selectedValue, password: password)
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: session.rememberMe ? "checkmark.square.fill" : "square")
+                            .font(.body)
+                            .foregroundStyle(AppTheme.teal)
+                        Text("Remember me")
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("loginRememberMe")
+                .accessibilityLabel("Remember me")
+                .accessibilityAddTraits(session.rememberMe ? [.isSelected] : [])
+
+                Spacer(minLength: 8)
+
+                Button("Forget Password") {
+                    session.lastError = nil
+                    rememberedLoginWhenOpeningSheet = session.rememberedLogin
+                    showingForgotPassword = true
+                }
+                .font(.subheadline.weight(.semibold))
+                .accessibilityIdentifier("loginForgotPassword")
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("loginErrorLabel")
+            }
+
+            Button {
+                errorMessage = session.logIn(username: contact.selectedValue, password: password)
+            } label: {
+                Text("Sign In")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(AppTheme.teal)
+            .disabled(!canLogIn)
+            .padding(.top, 4)
+            .accessibilityIdentifier("loginSignInButton")
+        }
+        .padding(.horizontal, 24)
+        .onChange(of: contact.email) { _, _ in
+            beginManualLogin()
+            saveRememberedIfNeeded()
+        }
+        .onChange(of: contact.phone) { _, _ in
+            beginManualLogin()
+            saveRememberedIfNeeded()
+        }
+        .onChange(of: password) { _, _ in
+            beginManualLogin()
+            saveRememberedIfNeeded()
+        }
+    }
+
     @discardableResult
     private func applyRememberedIfChanged() -> Bool {
         let login = session.rememberedLogin
@@ -237,6 +262,7 @@ struct LoginView: View {
     }
 
     private func scheduleFaceIDPrompt() {
+        guard AppLaunchFlags.passwordLoginEnabled else { return }
         guard !didAutoPromptFaceID, !prefersManualLogin else { return }
         guard session.prefersFaceIDLogin, session.canOfferFaceID, !AppLaunchFlags.isUITesting else { return }
         didAutoPromptFaceID = true
