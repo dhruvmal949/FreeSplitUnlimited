@@ -300,6 +300,32 @@ final class AuthSessionTests: XCTestCase {
         XCTAssertFalse(session.hasUnlockableAccount)
     }
 
+    func testAppleSignInCreatesASession() {
+        session.finishSocialLogin(provider: .apple, name: "Pat Lee", email: "pat@privaterelay.appleid.com")
+        XCTAssertTrue(session.isAuthenticated)
+        XCTAssertEqual(session.provider, .apple)
+        XCTAssertEqual(session.email, "pat@privaterelay.appleid.com")
+        XCTAssertEqual(session.displayName, "Pat Lee")
+    }
+
+    func testDeleteAccountRemovesSocialSession() {
+        session.finishSocialLogin(provider: .apple, name: "Pat Lee", email: "pat@privaterelay.appleid.com")
+        AppleIdentityStore.save(userID: "apple.user.delete", email: "pat@privaterelay.appleid.com", name: "Pat Lee")
+        session.deleteCurrentAccount()
+        XCTAssertFalse(session.isAuthenticated)
+        XCTAssertEqual(session.email, "")
+        XCTAssertNil(AppleIdentityStore.load(userID: "apple.user.delete"))
+    }
+
+    func testAppleIdentityIsRememberedForLaterSignIns() {
+        AppleIdentityStore.resetForTesting()
+        AppleIdentityStore.save(userID: "apple.user.1", email: "hidden@privaterelay.appleid.com", name: "Pat Lee")
+        let stored = AppleIdentityStore.load(userID: "apple.user.1")
+        XCTAssertEqual(stored?.email, "hidden@privaterelay.appleid.com")
+        XCTAssertEqual(stored?.name, "Pat Lee")
+        AppleIdentityStore.resetForTesting()
+    }
+
     func testGoogleEmailConfirmation() {
         XCTAssertEqual(session.confirmGoogleEmail("not-an-email"), "Enter the Google email you just signed in with.")
         XCTAssertNil(session.confirmGoogleEmail("pat.lee@gmail.com"))

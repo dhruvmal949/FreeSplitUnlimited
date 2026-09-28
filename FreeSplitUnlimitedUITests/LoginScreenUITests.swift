@@ -16,23 +16,23 @@ final class LoginScreenUITests: XCTestCase {
     func testLoginScreenShowsAllFields() {
         let app = launchApp()
 
-        XCTAssertTrue(app.textFields["loginEmailField"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.secureTextFields["loginPasswordField"].exists)
-        XCTAssertTrue(app.buttons["loginRememberMe"].exists)
-        XCTAssertTrue(app.buttons["loginForgotPassword"].exists)
-        XCTAssertTrue(app.buttons["loginSignInButton"].exists)
+        XCTAssertTrue(app.buttons["loginAppleButton"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["loginGoogleButton"].exists)
+        XCTAssertFalse(app.buttons["loginFacebookButton"].exists)
+        XCTAssertFalse(app.textFields["loginEmailField"].exists)
+        XCTAssertFalse(app.secureTextFields["loginPasswordField"].exists)
+        XCTAssertFalse(app.buttons["loginRememberMe"].exists)
+        XCTAssertFalse(app.buttons["loginForgotPassword"].exists)
+        XCTAssertFalse(app.buttons["loginSignInButton"].exists)
+        XCTAssertFalse(app.buttons["loginCreateAccount"].exists)
         XCTAssertFalse(app.buttons["loginGuestButton"].exists)
         XCTAssertFalse(app.buttons["Guest"].exists)
-        XCTAssertTrue(app.buttons["loginCreateAccount"].exists)
-        XCTAssertTrue(app.buttons["loginGoogleButton"].exists)
-        XCTAssertFalse(app.buttons["loginAppleButton"].exists)
-        XCTAssertFalse(app.buttons["loginFacebookButton"].exists)
-        XCTAssertFalse(app.buttons["loginSignInButton"].isEnabled)
-        XCTAssertFalse(app.buttons["loginFaceIDButton"].exists, "Face ID must not appear until a verified account exists")
+        XCTAssertFalse(app.buttons["loginFaceIDButton"].exists)
     }
 
     @MainActor
-    func testSignInStaysDisabledUntilBothFieldsAreFilled() {
+    func testSignInStaysDisabledUntilBothFieldsAreFilled() throws {
+        try skipUnlessPasswordLoginEnabled()
         let app = launchApp()
         let email = app.textFields["loginEmailField"]
         let password = app.secureTextFields["loginPasswordField"]
@@ -51,7 +51,8 @@ final class LoginScreenUITests: XCTestCase {
     }
 
     @MainActor
-    func testUnknownAccountShowsErrorOnSignIn() {
+    func testUnknownAccountShowsErrorOnSignIn() throws {
+        try skipUnlessPasswordLoginEnabled()
         let app = launchApp()
         fillLogin(app, email: "missing@example.com", password: "secret1")
         dismissKeyboard(app)
@@ -64,7 +65,8 @@ final class LoginScreenUITests: XCTestCase {
     }
 
     @MainActor
-    func testRememberMeToggleFlips() {
+    func testRememberMeToggleFlips() throws {
+        try skipUnlessPasswordLoginEnabled()
         let app = launchApp()
         let rememberMe = app.buttons["loginRememberMe"]
         XCTAssertTrue(rememberMe.waitForExistence(timeout: 6))
@@ -73,7 +75,8 @@ final class LoginScreenUITests: XCTestCase {
     }
 
     @MainActor
-    func testCreateAccountShowsAllFieldsAndSaveStaysDisabledUntilValid() {
+    func testCreateAccountShowsAllFieldsAndSaveStaysDisabledUntilValid() throws {
+        try skipUnlessPasswordLoginEnabled()
         let app = launchApp()
         app.buttons["loginCreateAccount"].tap()
 
@@ -104,7 +107,8 @@ final class LoginScreenUITests: XCTestCase {
     }
 
     @MainActor
-    func testForgotPasswordShowsAllFields() {
+    func testForgotPasswordShowsAllFields() throws {
+        try skipUnlessPasswordLoginEnabled()
         let app = launchApp()
         app.buttons["loginForgotPassword"].tap()
 
@@ -130,14 +134,15 @@ final class LoginScreenUITests: XCTestCase {
     @MainActor
     func testLoginScreenDoesNotOfferGuest() {
         let app = launchApp()
-        XCTAssertTrue(app.buttons["loginSignInButton"].waitForExistence(timeout: 6))
+        XCTAssertTrue(app.buttons["loginAppleButton"].waitForExistence(timeout: 6))
         XCTAssertFalse(app.buttons["loginGuestButton"].exists)
         XCTAssertFalse(app.buttons["Guest"].exists)
         XCTAssertFalse(app.buttons["Continue as Guest"].exists)
     }
 
     @MainActor
-    func testCreateAccountEmailFlowThenSignInAndResetPassword() {
+    func testCreateAccountEmailFlowThenSignInAndResetPassword() throws {
+        try skipUnlessPasswordLoginEnabled()
         let app = launchApp()
         let email = "login.ui.\(Int(Date().timeIntervalSince1970))@example.com"
         let firstPassword = "secret1"
@@ -207,7 +212,8 @@ final class LoginScreenUITests: XCTestCase {
     }
 
     @MainActor
-    func testCreateAccountPhoneFieldEnablesSaveWithoutEmail() {
+    func testCreateAccountPhoneFieldEnablesSaveWithoutEmail() throws {
+        try skipUnlessPasswordLoginEnabled()
         let app = launchApp()
         app.buttons["loginCreateAccount"].tap()
         XCTAssertTrue(app.navigationBars["New Account"].waitForExistence(timeout: 5))
@@ -227,7 +233,8 @@ final class LoginScreenUITests: XCTestCase {
     }
 
     @MainActor
-    func testFaceIDButtonUnlocksExistingAccount() {
+    func testFaceIDButtonUnlocksExistingAccount() throws {
+        try skipUnlessPasswordLoginEnabled()
         let app = launchApp(arguments: ["-stub-biometrics"])
         let email = "faceid.ui.\(Int(Date().timeIntervalSince1970))@example.com"
 
@@ -261,6 +268,19 @@ final class LoginScreenUITests: XCTestCase {
 
         tapTab(app, "Settings")
         XCTAssertTrue(app.staticTexts["Pat Lee"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    private func skipUnlessPasswordLoginEnabled(
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        try XCTSkipUnless(
+            false,
+            "Email/phone password login is hidden until that flow is finished.",
+            file: file,
+            line: line
+        )
     }
 
     @MainActor

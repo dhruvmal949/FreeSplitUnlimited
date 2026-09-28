@@ -4,13 +4,17 @@
 //
 
 import Contacts
+import SwiftData
 import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject private var mesh = MeshSyncService.shared
     @ObservedObject private var session = AuthSession.shared
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Occasion.createdAt, order: .reverse) private var allOccasions: [Occasion]
     @Environment(\.openURL) private var openURL
     @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
+    @State private var showingDeleteAccount = false
 
     private var contactsStatus: String {
         switch CNContactStore.authorizationStatus(for: .contacts) {
@@ -82,6 +86,21 @@ struct SettingsView: View {
                     Button("Sign Out", role: .destructive) {
                         session.signOut()
                     }
+                    if !session.isGuest {
+                        Button("Delete Account", role: .destructive) {
+                            showingDeleteAccount = true
+                        }
+                        .accessibilityIdentifier("settingsDeleteAccount")
+                    }
+                }
+
+                Section("Legal") {
+                    NavigationLink("Privacy Policy") {
+                        PrivacyPolicyView()
+                    }
+                    NavigationLink("Support") {
+                        SupportView()
+                    }
                 }
 
                 Section("About") {
@@ -94,7 +113,7 @@ struct SettingsView: View {
                     HStack {
                         Text("Version")
                         Spacer()
-                        Text("1.0")
+                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -106,8 +125,29 @@ struct SettingsView: View {
             .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
             .homeBackButton()
             .avoidsMainTabBar()
+            .alert("Delete Account?", isPresented: $showingDeleteAccount) {
+                Button("Delete Account", role: .destructive) {
+                    deleteAccountAndLocalSplits()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This removes your sign-in and local splits from this iPhone. It cannot be undone.")
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 contactsAllowed = ContactAuthorization.canUseSystemPicker
             }
+    }
+
+    private func deleteAccountAndLocalSplits() {
+        let identity = AccountIdentity(
+            accountID: session.accountID,
+            email: session.email,
+            phone: session.accountPhone,
+            names: session.selfNames.filter { FriendPairing.isUsableName($0) }
+        )
+        for occasion in allOccasions where OccasionAccess.isVisible(occasion, as: identity) {
+            modelContext.removeGroup(occasion)
+        }
+        session.deleteCurrentAccount()
     }
 }

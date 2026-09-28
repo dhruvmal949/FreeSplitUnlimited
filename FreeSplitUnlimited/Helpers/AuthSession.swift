@@ -2,7 +2,7 @@
 //  AuthSession.swift
 //  FreeSplitUnlimited
 //
-//  Username + password accounts on this iPhone, plus Google.
+//  Username + password accounts on this iPhone, plus Google and Apple.
 //
 
 import Combine
@@ -655,6 +655,47 @@ final class AuthSession: ObservableObject {
         guestAccountID = nil
         suppressFaceIDUntil = Date().addingTimeInterval(Self.signOutFaceIDCooldown)
         clearPersistedSession()
+    }
+
+    /// Guideline 5.1.1(v): remove this sign-in and its local account data from the phone.
+    func deleteCurrentAccount() {
+        let mail = email
+        let login = currentLogin
+        let id = currentAccountID
+
+        var accounts = loadAccounts()
+        accounts.removeAll { account in
+            if let id, account.id == id { return true }
+            if !mail.isEmpty, matchesLogin(account, mail) { return true }
+            if !login.isEmpty, matchesLogin(account, login) { return true }
+            return false
+        }
+        saveAccounts(accounts)
+
+        AppleIdentityStore.remove(email: mail)
+        OccasionAccess.resetClaimIfOwned(by: id)
+        removeStableAccountID(email: mail, login: login)
+
+        pairingNickname = ""
+        prefersFaceIDLogin = false
+        UserDefaults.standard.removeObject(forKey: Self.pairingNameKey)
+        UserDefaults.standard.removeObject(forKey: Self.lastLoginKey)
+        UserDefaults.standard.removeObject(forKey: Self.prefersFaceIDKey)
+        UserDefaults.standard.removeObject(forKey: Self.answeredFaceIDKey)
+        clearRememberedCredentials()
+        clearUnlockSession()
+        signOut()
+    }
+
+    private func removeStableAccountID(email: String, login: String) {
+        let prefix = AppLaunchFlags.isAutomatedTesting
+            ? "freeSplit.auth.stableAccount.testing."
+            : "freeSplit.auth.stableAccount."
+        for seed in [email, login] {
+            let keySeed = seed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !keySeed.isEmpty else { continue }
+            UserDefaults.standard.removeObject(forKey: prefix + keySeed)
+        }
     }
 
     private var shouldAskFaceIDOptIn: Bool {

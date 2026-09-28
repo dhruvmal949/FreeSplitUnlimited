@@ -6,12 +6,29 @@
 import SwiftUI
 
 struct SocialAuthButtons: View {
+    var appleTitle = "Sign in with Apple"
     var googleTitle = "Continue with Google"
 
     @ObservedObject private var session = AuthSession.shared
 
     var body: some View {
         VStack(spacing: 12) {
+            Button {
+                SocialAuthController.shared.signInWithApple()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "apple.logo")
+                        .font(.title3.weight(.semibold))
+                        .frame(width: 22)
+                    Text(appleTitle)
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+            }
+            .buttonStyle(SocialLoginButtonStyle(background: .black, foreground: .white))
+            .accessibilityIdentifier("loginAppleButton")
+
             Button {
                 SocialAuthController.shared.signInWithGoogle()
             } label: {

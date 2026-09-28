@@ -45,6 +45,12 @@ enum OccasionAccess {
         UserDefaults.standard.removeObject(forKey: claimedOwnerKey)
     }
 
+    static func resetClaimIfOwned(by accountID: UUID?) {
+        guard let accountID else { return }
+        guard UserDefaults.standard.string(forKey: claimedOwnerKey) == accountID.uuidString else { return }
+        UserDefaults.standard.removeObject(forKey: claimedOwnerKey)
+    }
+
     /// First signed-in account after this update owns groups that have no owner yet.
     /// Later accounts on the same phone do not inherit those groups.
     @MainActor

@@ -26,4 +26,8 @@ enum AppLaunchFlags {
     static var stubBiometrics: Bool {
         ProcessInfo.processInfo.arguments.contains("-stub-biometrics")
     }
+
+    /// Email, phone, and password login stay in the project but are hidden
+    /// until that flow is finished. The app currently signs in with Google or Apple.
+    static let passwordLoginEnabled = false
 }
