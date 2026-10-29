@@ -205,10 +205,9 @@ private struct FriendDetailView: View {
     @State private var selectedAction: FriendAction = .request
     @State private var openedSplit: OpenedSplit?
     @State private var showingRecordPayment = false
-    @State private var inviteContacts: [PickedContact] = []
 
     private enum FriendAction {
-        case request, settle, remind
+        case request, settle
     }
 
     private struct OpenedSplit: Identifiable, Hashable {
@@ -231,17 +230,6 @@ private struct FriendDetailView: View {
 
     private var primaryOccasion: Occasion? {
         sharedOccasions.first { net(in: $0) != 0 } ?? sharedOccasions.first
-    }
-
-    private var friendContact: PickedContact? {
-        for occasion in sharedOccasions {
-            if let person = occasion.uniqueMembers.first(where: {
-                FriendPairing.namesMatch($0.name, summary.name)
-            }) {
-                return person.asPickedContact
-            }
-        }
-        return nil
     }
 
     var body: some View {
@@ -296,11 +284,6 @@ private struct FriendDetailView: View {
                 myNames: myNames
             )
         }
-        .friendInvite(
-            contacts: $inviteContacts,
-            splitName: summary.name,
-            occasion: primaryOccasion
-        )
     }
 
     private var hero: some View {
@@ -485,12 +468,6 @@ private struct FriendDetailView: View {
                 pill("Settle up", selected: selectedAction == .settle) {
                     selectedAction = .settle
                     showingRecordPayment = true
-                }
-                if let contact = friendContact, contact.hasUsableContactInfo {
-                    pill("Remind", selected: selectedAction == .remind) {
-                        selectedAction = .remind
-                        inviteContacts = [contact]
-                    }
                 }
             }
         }

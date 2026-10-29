@@ -36,26 +36,34 @@ struct CreateFriendSplitView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Split with")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
-
-                        TextField("Friend’s name", text: $friendName)
-                            .textContentType(.name)
-                            .textInputAutocapitalization(.words)
-                            .font(.headline)
-                            .accessibilityIdentifier("friendNameField")
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 12)
-                            .background(Color.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        if !trimmedFriendName.isEmpty {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Image(systemName: "person.crop.circle")
+                                        .foregroundStyle(AppTheme.teal)
+                                    Text(trimmedFriendName)
+                                        .accessibilityIdentifier("friendNameField")
+                                    Spacer()
+                                }
+                                if !friendEmail.isEmpty || !friendPhone.isEmpty {
+                                    Text([friendEmail, friendPhone].filter { !$0.isEmpty }.joined(separator: " · "))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.leading, 28)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
 
                         Button {
                             Task { await presentFriendPicker() }
                         } label: {
-                            Label("Choose from contacts", systemImage: "person.crop.circle.badge.plus")
+                            Label("Add people", systemImage: "person.badge.plus")
                                 .font(.subheadline.weight(.semibold))
                         }
                         .disabled(showingFriendPicker)
+                        .accessibilityIdentifier("addFriendToSplit")
+                        .padding(.top, 4)
                     }
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -95,6 +103,15 @@ struct CreateFriendSplitView: View {
                 FriendSearchPicker(
                     contactsAllowed: contactsAllowed,
                     savedFriends: KnownFriendsStore.previouslyUsedFriends(from: modelContext),
+                    existingPeople: trimmedFriendName.isEmpty
+                        ? []
+                        : [
+                            PickedContact(
+                                name: trimmedFriendName,
+                                email: friendEmail,
+                                phone: friendPhone
+                            )
+                        ],
                     selectionLimit: 1,
                     onPick: { contacts in
                         apply(contacts)

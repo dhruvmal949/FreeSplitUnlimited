@@ -63,7 +63,7 @@ struct OccasionDetailView: View {
                 } else {
                     switch selectedTab {
                     case 1:
-                        balancesTab
+                        settleUpTab
                     case 2:
                         whoIsOwedTab
                     case 3:
@@ -294,9 +294,6 @@ struct OccasionDetailView: View {
     private func pill(_ title: String, tag: Int) -> some View {
         Button {
             selectedTab = tag
-            if tag == 1 {
-                presentSettlePaymentIfNeeded()
-            }
         } label: {
             Text(title)
                 .font(.subheadline.weight(.semibold))
@@ -364,23 +361,6 @@ struct OccasionDetailView: View {
                 )
             } else {
                 List {
-                    if occasion.isOneToOne {
-                        Section {
-                            Button {
-                                Task { await presentMemberPicker() }
-                            } label: {
-                                Label("Add people", systemImage: "person.badge.plus")
-                                    .font(.headline)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 8)
-                            }
-                            .listRowBackground(AppTheme.teal)
-                            .foregroundStyle(.white)
-                        } footer: {
-                            Text("This split is just the two of you. Adding more people saves it as a group.")
-                        }
-                    }
-
                     if sortedExpenses.isEmpty {
                         Text("Tap Add expense to log something someone paid for.")
                             .foregroundStyle(.secondary)
@@ -403,35 +383,8 @@ struct OccasionDetailView: View {
         }
     }
 
-    private var balancesTab: some View {
+    private var settleUpTab: some View {
         List {
-            Section("Who is owed") {
-                ForEach(balances) { balance in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(balance.person.name)
-                            if balance.person.hasContactInfo {
-                                Text([balance.person.email, balance.person.phone].filter { !$0.isEmpty }.joined(separator: " · "))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        Spacer()
-                        Text(balanceLabel(for: balance.net))
-                            .foregroundStyle(balanceColor(for: balance.net))
-                            .fontWeight(.semibold)
-                    }
-                    .listRowBackground(Color.white.opacity(0.78))
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        if FriendPairing.isUsableName(balance.person.name) {
-                            Button("Delete", role: .destructive) {
-                                personToRemove = balance.person
-                            }
-                        }
-                    }
-                }
-            }
-
             Section {
                 if settlements.isEmpty {
                     Text("Everyone is settled up.")
@@ -462,10 +415,8 @@ struct OccasionDetailView: View {
                         .listRowBackground(Color.white.opacity(0.78))
                     }
                 }
-            } header: {
-                Text("Settle up")
             } footer: {
-                Text("Suggested payments so everyone is even.")
+                Text("Suggested payments so everyone is even. Tap a row to record it.")
             }
         }
         .freeSplitListStyle()
@@ -476,7 +427,14 @@ struct OccasionDetailView: View {
             Section("Who is owed") {
                 ForEach(balances) { balance in
                     HStack {
-                        Text(balance.person.name)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(balance.person.name)
+                            if balance.person.hasContactInfo {
+                                Text([balance.person.email, balance.person.phone].filter { !$0.isEmpty }.joined(separator: " · "))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                         Spacer()
                         Text(balanceLabel(for: balance.net))
                             .foregroundStyle(balanceColor(for: balance.net))
@@ -610,36 +568,6 @@ struct OccasionDetailView: View {
 
     private func balanceColor(for net: Decimal) -> Color {
         AppTheme.balanceColor(for: net)
-    }
-
-    private func presentSettlePaymentIfNeeded() {
-        if let settlement = settlements.first(where: { settlement in
-            myNames.contains { FriendPairing.namesMatch($0, settlement.from.name) }
-                || myNames.contains { FriendPairing.namesMatch($0, settlement.to.name) }
-        }) ?? settlements.first, settlement.amount > 0 {
-            paymentToRecord = PendingGroupPayment(
-                payerName: settlement.from.name,
-                receiverName: settlement.to.name,
-                amount: settlement.amount
-            )
-            return
-        }
-
-        let me = occasion.uniqueMembers.first { member in
-            myNames.contains { FriendPairing.namesMatch($0, member.name) }
-        }
-        let other = occasion.uniqueMembers.first { member in
-            !myNames.contains { FriendPairing.namesMatch($0, member.name) }
-        }
-        paymentToRecord = PendingGroupPayment(
-            payerName: me?.name ?? "You",
-            receiverName: other?.name ?? settledFallbackName,
-            amount: 0
-        )
-    }
-
-    private var settledFallbackName: String {
-        occasion.uniqueMembers.first { FriendPairing.isUsableName($0.name) }?.name ?? "Friend"
     }
 
     private func deleteExpenses(at offsets: IndexSet) {
