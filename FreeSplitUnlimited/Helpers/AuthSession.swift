@@ -215,10 +215,13 @@ final class AuthSession: ObservableObject {
 
     private var pendingCode = ""
     private var stagedPasswordLogin: (account: LocalAccount, login: String, password: String)?
+    private var stagedSocialLogin: (provider: AuthProvider, name: String, email: String, login: String)?
     private var currentLogin = ""
     private var currentAccountID: UUID?
     private var guestAccountID: UUID?
     private var suppressFaceIDUntil: Date?
+    /// After Sign Out, Face ID waits for a tap. Opening the app fresh can still auto-prompt.
+    private var suppressFaceIDAutoPrompt = false
     private var faceIDUnlockGeneration = 0
     /// After sign-out, wait this long before Face ID auto-opens the account again.
     static let signOutFaceIDCooldown: TimeInterval = 5
@@ -251,10 +254,12 @@ final class AuthSession: ObservableObject {
         pendingVerification = nil
         pendingCode = ""
         stagedPasswordLogin = nil
+        stagedSocialLogin = nil
         currentLogin = ""
         currentAccountID = nil
         guestAccountID = nil
         suppressFaceIDUntil = nil
+        suppressFaceIDAutoPrompt = false
         faceIDUnlockGeneration = 0
         testingAsksFaceIDOptIn = false
         rememberMe = false
@@ -294,7 +299,14 @@ final class AuthSession: ObservableObject {
     }
 
     var hasUnlockableAccount: Bool {
-        verifiedPasswordAccountForUnlock() != nil
+        if verifiedPasswordAccountForUnlock() != nil { return true }
+        guard let saved = loadUnlockSession(), !saved.isGuest else { return false }
+        switch AuthProvider(rawValue: saved.provider) {
+        case .apple, .google, .password:
+            return true
+        default:
+            return false
+        }
     }
 
     var canOfferFaceID: Bool {
@@ -328,8 +340,8 @@ final class AuthSession: ObservableObject {
     func unlockWithFaceID() async -> String? {
         lastError = nil
         let generation = faceIDUnlockGeneration
-        guard verifiedPasswordAccountForUnlock() != nil else {
-            return "Create an account and sign in first, then you can use Face ID."
+        guard hasUnlockableAccount else {
+            return "Sign in with Apple or Google first, then you can use Face ID."
         }
         let availability = BiometricAuth.canEvaluate()
         guard availability.0 else {
@@ -339,7 +351,7 @@ final class AuthSession: ObservableObject {
             let matched = try await BiometricAuth.evaluate(reason: "Open your Free Split account")
             guard generation == faceIDUnlockGeneration else { return nil }
             guard matched else { return "Face ID didn’t match." }
-            guard restoreVerifiedPasswordSession() else { return "We couldn’t restore your account. Sign in again." }
+            guard restoreUnlockableSession() else { return "We couldn’t restore your account. Sign in again." }
             return nil
         } catch {
             let ns = error as NSError
@@ -394,13 +406,25 @@ final class AuthSession: ObservableObject {
         UserDefaults.standard.set(enabled, forKey: Self.prefersFaceIDKey)
         UserDefaults.standard.set(true, forKey: Self.answeredFaceIDKey)
         needsFaceIDOptIn = false
-        guard let staged = stagedPasswordLogin else { return }
-        stagedPasswordLogin = nil
-        finishPasswordLogin(account: staged.account, login: staged.login, password: staged.password)
+        if let staged = stagedPasswordLogin {
+            stagedPasswordLogin = nil
+            finishPasswordLogin(account: staged.account, login: staged.login, password: staged.password)
+            return
+        }
+        if let social = stagedSocialLogin {
+            stagedSocialLogin = nil
+            applySession(
+                provider: social.provider,
+                name: social.name,
+                email: social.email,
+                guest: false,
+                login: social.login
+            )
+        }
     }
 
     var shouldAutoPromptFaceID: Bool {
-        prefersFaceIDLogin && canOfferFaceID && !isFaceIDInSignOutCooldown && !AppLaunchFlags.isUITesting
+        prefersFaceIDLogin && canOfferFaceID && !suppressFaceIDAutoPrompt && !AppLaunchFlags.isUITesting
     }
 
     var isFaceIDInSignOutCooldown: Bool {
@@ -415,6 +439,7 @@ final class AuthSession: ObservableObject {
 
     func expireFaceIDSignOutCooldownForTesting() {
         suppressFaceIDUntil = nil
+        suppressFaceIDAutoPrompt = false
     }
 
     func beginRegistration(
@@ -598,12 +623,19 @@ final class AuthSession: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let mail = email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let handle = login?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let resolvedName = trimmed.isEmpty ? provider.title : trimmed
+        let resolvedLogin = handle.isEmpty ? mail : handle
+        if shouldAskFaceIDOptIn {
+            stagedSocialLogin = (provider, resolvedName, mail, resolvedLogin)
+            needsFaceIDOptIn = true
+            return
+        }
         applySession(
             provider: provider,
-            name: trimmed.isEmpty ? provider.title : trimmed,
+            name: resolvedName,
             email: mail,
             guest: false,
-            login: handle.isEmpty ? mail : handle
+            login: resolvedLogin
         )
     }
 
@@ -651,10 +683,12 @@ final class AuthSession: ObservableObject {
         needsGoogleEmailConfirmation = false
         needsFaceIDOptIn = false
         stagedPasswordLogin = nil
+        stagedSocialLogin = nil
         currentLogin = ""
         currentAccountID = nil
         guestAccountID = nil
         suppressFaceIDUntil = Date().addingTimeInterval(Self.signOutFaceIDCooldown)
+        suppressFaceIDAutoPrompt = true
         clearPersistedSession()
     }
 
@@ -750,6 +784,9 @@ final class AuthSession: ObservableObject {
         isAuthenticated = true
         currentLogin = login.isEmpty ? email : login
         currentAccountID = accountID
+        if !guest {
+            suppressFaceIDAutoPrompt = false
+        }
         persistSession()
         if guest {
             currentLogin = ""
@@ -861,6 +898,23 @@ final class AuthSession: ObservableObject {
         currentLogin = saved.login ?? saved.email
         currentAccountID = saved.accountID
         persistSession()
+        return true
+    }
+
+    @discardableResult
+    private func restoreUnlockableSession() -> Bool {
+        if restoreVerifiedPasswordSession() { return true }
+        guard let saved = loadUnlockSession(), !saved.isGuest else { return false }
+        guard let provider = AuthProvider(rawValue: saved.provider),
+              provider == .apple || provider == .google else { return false }
+        applySession(
+            provider: provider,
+            name: saved.displayName,
+            email: saved.email,
+            guest: false,
+            login: saved.login ?? saved.email,
+            accountID: saved.accountID
+        )
         return true
     }
 

@@ -171,10 +171,6 @@ struct CreateGroupView: View {
 
     private var kindSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Kind of group")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 ForEach(GroupKind.allCases) { option in
                     Button {
@@ -206,10 +202,6 @@ struct CreateGroupView: View {
 
     private var peopleSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("People")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(visibleFriends) { friend in
                     VStack(alignment: .leading, spacing: 2) {
