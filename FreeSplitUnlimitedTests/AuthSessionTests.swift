@@ -308,6 +308,19 @@ final class AuthSessionTests: XCTestCase {
         XCTAssertEqual(session.displayName, "Pat Lee")
     }
 
+    func testAppleSignInWorksWithoutEmailOnLaterDevices() {
+        session.finishSocialLogin(
+            provider: .apple,
+            name: "Pat Lee",
+            email: nil,
+            login: "apple.user.stable.1"
+        )
+        XCTAssertTrue(session.isAuthenticated)
+        XCTAssertEqual(session.provider, .apple)
+        XCTAssertEqual(session.displayName, "Pat Lee")
+        XCTAssertEqual(session.email, "")
+    }
+
     func testDeleteAccountRemovesSocialSession() {
         session.finishSocialLogin(provider: .apple, name: "Pat Lee", email: "pat@privaterelay.appleid.com")
         AppleIdentityStore.save(userID: "apple.user.delete", email: "pat@privaterelay.appleid.com", name: "Pat Lee")
