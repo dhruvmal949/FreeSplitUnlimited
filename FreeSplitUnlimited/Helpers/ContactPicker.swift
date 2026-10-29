@@ -748,8 +748,6 @@ struct FriendSearchPicker: View {
                             Label("Choose a contact", systemImage: "person.crop.circle.badge.plus")
                         }
                         .accessibilityIdentifier("chooseOneContact")
-                    } footer: {
-                        Text("Picks one person from your phone. You can also type a name. Contacts access is optional.")
                     }
 
                     Section(usingContacts ? "From your contacts" : "Saved friends") {

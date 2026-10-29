@@ -460,14 +460,6 @@ struct AddExpenseView: View {
             if splitMethod != .equal, loadedShares.isEmpty {
                 ensureDefaultShares(for: Array(selectedParticipantIDs), method: splitMethod)
             }
-        } else {
-            if paidByID == nil {
-                paidByID = sortedMembers.first?.id
-            }
-            if selectedParticipantIDs.isEmpty {
-                selectedParticipantIDs = Set(sortedMembers.map(\.id))
-            }
-            ensureDefaultShares(for: Array(selectedParticipantIDs))
         }
     }
 

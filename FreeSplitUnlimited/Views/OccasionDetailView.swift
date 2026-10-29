@@ -315,10 +315,6 @@ struct OccasionDetailView: View {
     private var aloneInviteCard: some View {
         VStack {
             VStack(spacing: 16) {
-                Text("You're the only one here!")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-
                 Button {
                     Task { await presentMemberPicker() }
                 } label: {
@@ -415,8 +411,6 @@ struct OccasionDetailView: View {
                         .listRowBackground(Color.white.opacity(0.78))
                     }
                 }
-            } footer: {
-                Text("Suggested payments so everyone is even. Tap a row to record it.")
             }
         }
         .freeSplitListStyle()

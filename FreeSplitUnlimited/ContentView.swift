@@ -252,13 +252,6 @@ private struct GroupsView: View {
         .navigationTitle("Home")
         .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showingImporter = true
-                } label: {
-                    Label("Import from File", systemImage: "square.and.arrow.down")
-                }
-            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     openNewSplit()

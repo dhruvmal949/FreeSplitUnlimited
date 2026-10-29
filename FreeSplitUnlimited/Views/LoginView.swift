@@ -12,13 +12,11 @@ struct LoginView: View {
     @State private var errorMessage: String?
     @State private var showingCreateAccount = false
     @State private var showingForgotPassword = false
-    @State private var didAutoPromptFaceID = false
     @State private var didPrefillContact = false
+    @State private var didAutoPromptFaceID = false
     @State private var rememberedLoginWhenOpeningSheet = ""
     @State private var prefersManualLogin = false
     @State private var ignoreLoginEdits = true
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var didFinishFirstAppear = false
 
     private var canLogIn: Bool {
         contact.isValid && !password.isEmpty
@@ -54,10 +52,34 @@ struct LoginView: View {
                                     .foregroundStyle(.secondary)
                                 Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
                             }
-                        } else {
-                            Text("Sign in to continue")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                        }
+
+                        if session.canOfferFaceID {
+                            Button {
+                                Task {
+                                    errorMessage = await session.unlockWithFaceID()
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "faceid")
+                                    Text(session.faceIDButtonTitle)
+                                }
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(AppTheme.teal)
+                            .accessibilityLabel("Face ID")
+                            .accessibilityIdentifier("loginFaceIDButton")
+                        }
+
+                        if let errorMessage {
+                            Text(errorMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityIdentifier("loginErrorLabel")
                         }
 
                         SocialAuthButtons()
@@ -104,7 +126,7 @@ struct LoginView: View {
                     session.answerFaceIDOptIn(false)
                 }
             } message: {
-                Text("Use Face ID to open Free Split next time instead of signing in with your email or phone?")
+                Text("Use Face ID to open Free Split next time instead of signing in with Apple or Google?")
             }
             .onAppear {
                 if !didPrefillContact {
@@ -114,14 +136,7 @@ struct LoginView: View {
                 scheduleFaceIDPrompt()
                 DispatchQueue.main.async {
                     ignoreLoginEdits = false
-                    didFinishFirstAppear = true
                 }
-            }
-            .onChange(of: scenePhase) { _, phase in
-                guard phase == .active, didFinishFirstAppear else { return }
-                guard !prefersManualLogin, !session.isAuthenticated else { return }
-                didAutoPromptFaceID = false
-                scheduleFaceIDPrompt()
             }
         }
         .tint(AppTheme.teal)
@@ -262,15 +277,11 @@ struct LoginView: View {
     }
 
     private func scheduleFaceIDPrompt() {
-        guard AppLaunchFlags.passwordLoginEnabled else { return }
         guard !didAutoPromptFaceID, !prefersManualLogin else { return }
-        guard session.prefersFaceIDLogin, session.canOfferFaceID, !AppLaunchFlags.isUITesting else { return }
+        guard session.shouldAutoPromptFaceID else { return }
         didAutoPromptFaceID = true
-        let delay = session.autoPromptDelayRemaining > 0
-            ? session.autoPromptDelayRemaining
-            : 0.35
         Task {
-            try? await Task.sleep(for: .seconds(delay))
+            try? await Task.sleep(for: .milliseconds(350))
             guard !prefersManualLogin, !session.isAuthenticated else { return }
             guard session.shouldAutoPromptFaceID else { return }
             errorMessage = await session.unlockWithFaceID()

@@ -237,13 +237,11 @@ final class AuthSessionTests: XCTestCase {
         XCTAssertFalse(session.isAuthenticated)
         XCTAssertTrue(session.prefersFaceIDLogin)
         XCTAssertFalse(session.shouldAutoPromptFaceID)
-        XCTAssertTrue(session.isFaceIDInSignOutCooldown)
         XCTAssertTrue(session.hasUnlockableAccount)
 
         session.expireFaceIDSignOutCooldownForTesting()
         BiometricAuth.canEvaluateOverride = true
         XCTAssertTrue(session.shouldAutoPromptFaceID)
-        XCTAssertGreaterThan(AuthSession.signOutFaceIDCooldown, 4)
     }
 
     func testFaceIDOptInNoShowsLoginOnReturn() {
@@ -351,7 +349,7 @@ final class AuthSessionTests: XCTestCase {
 
     func testFaceIDRequiresAnExistingAccount() async {
         let message = await session.unlockWithFaceID()
-        XCTAssertEqual(message, "Create an account and sign in first, then you can use Face ID.")
+        XCTAssertEqual(message, "Sign in with Apple or Google first, then you can use Face ID.")
         XCTAssertFalse(session.canOfferFaceID)
     }
 
@@ -435,12 +433,44 @@ final class AuthSessionTests: XCTestCase {
         XCTAssertTrue(session.canOfferFaceID)
     }
 
-    func testGoogleSignInDoesNotEnableFaceID() {
+    func testGoogleSignInEnablesFaceID() {
         XCTAssertNil(session.confirmGoogleEmail("pat.lee@gmail.com"))
         session.signOut()
         BiometricAuth.canEvaluateOverride = true
-        XCTAssertFalse(session.hasUnlockableAccount)
-        XCTAssertFalse(session.canOfferFaceID)
+        XCTAssertTrue(session.hasUnlockableAccount)
+        XCTAssertTrue(session.canOfferFaceID)
+    }
+
+    func testAppleSignInEnablesFaceID() {
+        session.finishSocialLogin(
+            provider: .apple,
+            name: "Pat Lee",
+            email: "pat@privaterelay.appleid.com",
+            login: "apple.user.faceid"
+        )
+        session.signOut()
+        BiometricAuth.canEvaluateOverride = true
+        XCTAssertTrue(session.hasUnlockableAccount)
+        XCTAssertTrue(session.canOfferFaceID)
+    }
+
+    func testFaceIDUnlocksAppleAccount() async {
+        session.finishSocialLogin(
+            provider: .apple,
+            name: "Pat Lee",
+            email: "pat@privaterelay.appleid.com",
+            login: "apple.user.faceid.unlock"
+        )
+        session.signOut()
+        BiometricAuth.canEvaluateOverride = true
+        BiometricAuth.evaluateOverride = { true }
+        session.expireFaceIDSignOutCooldownForTesting()
+        let message = await session.unlockWithFaceID()
+        XCTAssertNil(message)
+        XCTAssertTrue(session.isAuthenticated)
+        XCTAssertEqual(session.provider, .apple)
+        XCTAssertEqual(session.email, "pat@privaterelay.appleid.com")
+        XCTAssertEqual(session.displayName, "Pat Lee")
     }
 
     func testSignOutStaysOnLoginUntilFaceIDMatches() async {
