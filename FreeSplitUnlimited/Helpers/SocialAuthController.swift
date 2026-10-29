@@ -109,24 +109,33 @@ final class SocialAuthController: NSObject, ASAuthorizationControllerDelegate, A
             return
         }
 
-        let userID = credential.user
+        let userID = credential.user.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !userID.isEmpty else {
+            AuthSession.shared.lastError = "Apple didn’t return an account."
+            return
+        }
+
         let sharedEmail = credential.email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tokenEmail = emailFromAppleIdentityToken(credential.identityToken)
         let sharedName = credential.fullName.map {
             PersonNameComponentsFormatter().string(from: $0).trimmingCharacters(in: .whitespacesAndNewlines)
         } ?? ""
         let stored = AppleIdentityStore.load(userID: userID)
-        let email = isValidEmail(sharedEmail) ? sharedEmail : (stored?.email ?? "")
+        let email = [sharedEmail, tokenEmail, stored?.email ?? ""].first(where: isValidEmail) ?? ""
         let fallbackName = stored.flatMap { $0.name.isEmpty ? nil : $0.name }
             ?? email.split(separator: "@").first.map(String.init)
             ?? "Apple"
         let name = sharedName.isEmpty ? fallbackName : sharedName
 
-        guard isValidEmail(email) else {
-            AuthSession.shared.lastError = "Apple didn’t share an email. Choose Share My Email or Hide My Email, then try again."
-            return
-        }
         AppleIdentityStore.save(userID: userID, email: email, name: name)
-        AuthSession.shared.finishSocialLogin(provider: .apple, name: name, email: email)
+        // Apple only sends email the first time. Later sign-ins on this or another
+        // device still work with the stable Apple user ID.
+        AuthSession.shared.finishSocialLogin(
+            provider: .apple,
+            name: name,
+            email: email,
+            login: userID
+        )
     }
 
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
@@ -140,6 +149,23 @@ final class SocialAuthController: NSObject, ASAuthorizationControllerDelegate, A
             top = presented
         }
         return top
+    }
+
+    /// Apple sometimes puts the same Hide My Email / shared email in the identity token
+    /// even when `credential.email` is empty on a later device.
+    private func emailFromAppleIdentityToken(_ token: Data?) -> String {
+        guard let token,
+              let jwt = String(data: token, encoding: .utf8) else { return "" }
+        let parts = jwt.split(separator: ".")
+        guard parts.count >= 2 else { return "" }
+        var payload = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while payload.count % 4 != 0 { payload.append("=") }
+        guard let data = Data(base64Encoded: payload),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let email = json["email"] as? String else { return "" }
+        return email.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func currentWindow() -> UIWindow? {

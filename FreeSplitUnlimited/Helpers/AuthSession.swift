@@ -593,16 +593,17 @@ final class AuthSession: ObservableObject {
         applySession(provider: .guest, name: "Guest", email: "", guest: true)
     }
 
-    func finishSocialLogin(provider: AuthProvider, name: String, email: String?) {
+    func finishSocialLogin(provider: AuthProvider, name: String, email: String?, login: String? = nil) {
         lastError = nil
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let mail = email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let handle = login?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         applySession(
             provider: provider,
             name: trimmed.isEmpty ? provider.title : trimmed,
             email: mail,
             guest: false,
-            login: mail
+            login: handle.isEmpty ? mail : handle
         )
     }
 

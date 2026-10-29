@@ -53,9 +53,7 @@ struct SystemContactPicker: UIViewControllerRepresentable {
         context.coordinator.isPresented = $isPresented
         context.coordinator.onPick = onPick
         context.coordinator.onCancel = onCancel
-        if isPresented {
-            context.coordinator.presentIfNeeded()
-        }
+        context.coordinator.sync(isPresented: isPresented)
     }
 
     final class Coordinator: NSObject, CNContactPickerDelegate {
@@ -64,6 +62,7 @@ struct SystemContactPicker: UIViewControllerRepresentable {
         var onPick: (PickedContact) -> Void
         var onCancel: () -> Void
         private var isShowingPicker = false
+        private var didScheduleRetry = false
 
         init(
             isPresented: Binding<Bool>,
@@ -75,12 +74,25 @@ struct SystemContactPicker: UIViewControllerRepresentable {
             self.onCancel = onCancel
         }
 
+        func sync(isPresented: Bool) {
+            if isPresented {
+                presentIfNeeded()
+            }
+        }
+
         func presentIfNeeded() {
             guard isPresented.wrappedValue, !isShowingPicker else { return }
             guard let presenter = presentationAnchor() else {
+                guard !didScheduleRetry else { return }
+                didScheduleRetry = true
                 DispatchQueue.main.async { [weak self] in
+                    self?.didScheduleRetry = false
                     self?.presentIfNeeded()
                 }
+                return
+            }
+            if presenter.presentedViewController is CNContactPickerViewController {
+                isShowingPicker = true
                 return
             }
             let picker = CNContactPickerViewController()
@@ -115,9 +127,11 @@ struct SystemContactPicker: UIViewControllerRepresentable {
         }
 
         private func finishPresented() {
-            isShowingPicker = false
-            DispatchQueue.main.async {
-                self.isPresented.wrappedValue = false
+            isPresented.wrappedValue = false
+            // Leave isShowingPicker true until after SwiftUI applies that binding,
+            // or updateUIViewController presents a second contacts sheet.
+            DispatchQueue.main.async { [weak self] in
+                self?.isShowingPicker = false
             }
         }
 
@@ -536,7 +550,6 @@ struct FriendSearchPicker: View {
     var onContactsAccessGranted: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
     @State private var query = ""
     @State private var selected: [PickedContact] = []
     @State private var usingContacts: Bool
@@ -736,7 +749,7 @@ struct FriendSearchPicker: View {
                         }
                         .accessibilityIdentifier("chooseOneContact")
                     } footer: {
-                        Text("Picks one person from your phone. This works even if Contacts access is Off.")
+                        Text("Picks one person from your phone. You can also type a name. Contacts access is optional.")
                     }
 
                     Section(usingContacts ? "From your contacts" : "Saved friends") {
@@ -749,22 +762,6 @@ struct FriendSearchPicker: View {
                                     requestAdd(friend)
                                 }
                             }
-                        }
-                    }
-
-                    if !usingContacts {
-                        Section {
-                            Button {
-                                openAppSettings()
-                            } label: {
-                                Label("Open Settings", systemImage: "gear")
-                                    .font(.headline)
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .listRowBackground(AppTheme.teal)
-                            .foregroundStyle(.white)
-                        } footer: {
-                            Text("To add someone who isn’t listed, open Settings and allow Contacts for Free Split.")
                         }
                     }
                 }
@@ -795,6 +792,7 @@ struct FriendSearchPicker: View {
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 guard ContactAuthorization.canUseSystemPicker else { return }
                 usingContacts = true
+                guard !showingSystemPicker else { return }
                 onContactsAccessGranted()
             }
             .background {
@@ -905,7 +903,7 @@ struct FriendSearchPicker: View {
         if trimmed.isEmpty {
             return usingContacts
                 ? "Search to add other friends, or choose one contact."
-                : "No other saved friends yet. Choose a contact, or allow Contacts in Settings to search."
+                : "No other saved friends yet. Choose a contact, or type a name to add someone."
         }
         return "No matches for “\(trimmed)”."
     }
@@ -973,10 +971,5 @@ struct FriendSearchPicker: View {
             }
         }
         .disabled(isSelected && friend.isMe)
-    }
-
-    private func openAppSettings() {
-        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-        openURL(url)
     }
 }

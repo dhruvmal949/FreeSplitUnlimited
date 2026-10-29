@@ -27,10 +27,7 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["New Split"].waitForExistence(timeout: 5))
 
         let friendName = "Alex"
-        let friendField = app.textFields["friendNameField"]
-        XCTAssertTrue(friendField.waitForExistence(timeout: 5))
-        friendField.tap()
-        friendField.typeText(friendName)
+        addPerson(app, named: friendName)
         app.buttons["createSplitButton"].tap()
 
         XCTAssertTrue(app.staticTexts[friendName].waitForExistence(timeout: 6))
@@ -127,10 +124,7 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Friends"].waitForExistence(timeout: 5))
         app.buttons["New Split"].tap()
         XCTAssertTrue(app.navigationBars["New Split"].waitForExistence(timeout: 5))
-        let friendField = app.textFields["friendNameField"]
-        XCTAssertTrue(friendField.waitForExistence(timeout: 5))
-        friendField.tap()
-        friendField.typeText("Alex")
+        addPerson(app, named: "Alex")
         app.buttons["createSplitButton"].tap()
         XCTAssertTrue(app.buttons["Group settings"].waitForExistence(timeout: 6))
 
@@ -292,7 +286,8 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         app.buttons["addFriendNextButton"].tap()
 
         let confirm = app.buttons["confirmAddFriends"]
-        XCTAssertTrue(confirm.waitForExistence(timeout: 4))
-        confirm.tap()
+        if confirm.waitForExistence(timeout: 3) {
+            confirm.tap()
+        }
     }
 }

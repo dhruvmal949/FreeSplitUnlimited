@@ -3,7 +3,6 @@
 //  FreeSplitUnlimited
 //
 
-import Contacts
 import SwiftData
 import SwiftUI
 
@@ -12,22 +11,7 @@ struct SettingsView: View {
     @ObservedObject private var session = AuthSession.shared
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Occasion.createdAt, order: .reverse) private var allOccasions: [Occasion]
-    @Environment(\.openURL) private var openURL
-    @State private var contactsAllowed = ContactAuthorization.canUseSystemPicker
     @State private var showingDeleteAccount = false
-
-    private var contactsStatus: String {
-        switch CNContactStore.authorizationStatus(for: .contacts) {
-        case .authorized:
-            return "Full Access"
-        case .limited:
-            return "Selected contacts"
-        case .denied, .restricted:
-            return "Off"
-        default:
-            return "Not asked yet"
-        }
-    }
 
     var body: some View {
         Form {
@@ -37,24 +21,6 @@ struct SettingsView: View {
                     }
                     .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
                     .listRowBackground(Color.clear)
-                }
-
-                Section {
-                    HStack {
-                        Text("Access")
-                        Spacer()
-                        Text(contactsStatus)
-                            .foregroundStyle(.secondary)
-                    }
-                    Button {
-                        if let url = URL(string: UIApplication.openSettingsURLString) {
-                            openURL(url)
-                        }
-                    } label: {
-                        Label("Change in Settings", systemImage: "gear")
-                    }
-                } header: {
-                    Text("Contacts")
                 }
 
                 Section("Account") {
@@ -132,9 +98,6 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("This removes your sign-in and local splits from this iPhone. It cannot be undone.")
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                contactsAllowed = ContactAuthorization.canUseSystemPicker
             }
     }
 
