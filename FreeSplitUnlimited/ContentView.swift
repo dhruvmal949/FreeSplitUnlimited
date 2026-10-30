@@ -107,7 +107,10 @@ struct ContentView: View {
     }
 
     private func selectTab(_ tab: Int) {
-        guard tab != selectedTab else { return }
+        if tab == selectedTab {
+            jumpToHome(tab: tab)
+            return
+        }
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
@@ -160,7 +163,6 @@ private struct GroupsView: View {
     private var allOccasions: [Occasion]
     @ObservedObject private var session = AuthSession.shared
     @State private var showingAddOccasion = false
-    @State private var showingImporter = false
     @State private var statusMessage: StatusMessage?
     @State private var openedGroupID: OpenedGroup?
     @State private var pendingOpenGroupID: UUID?
@@ -234,6 +236,11 @@ private struct GroupsView: View {
                                 OccasionRowView(occasion: occasion)
                             }
                             .listRowBackground(Color.white.opacity(0.78))
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button("Delete", role: .destructive) {
+                                    modelContext.removeGroup(occasion)
+                                }
+                            }
                         }
                     }
 
@@ -249,7 +256,7 @@ private struct GroupsView: View {
                 .contentMargins(.bottom, 12, for: .scrollContent)
             }
         }
-        .navigationTitle("Home")
+        .navigationTitle("Groups")
         .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -296,22 +303,6 @@ private struct GroupsView: View {
         }) {
             CreateGroupView { id in
                 pendingOpenGroupID = id
-            }
-        }
-        .fileImporter(
-            isPresented: $showingImporter,
-            allowedContentTypes: [.json, .data, .item],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                guard let url = urls.first else { return }
-                importSharedSplit(from: url)
-            case .failure(let error):
-                statusMessage = StatusMessage(
-                    title: "Import Failed",
-                    message: error.localizedDescription
-                )
             }
         }
         .alert(item: $statusMessage) { item in
@@ -368,27 +359,11 @@ private struct GroupsView: View {
         }
     }
 
-    private func importSharedSplit(from url: URL) {
-        do {
-            let occasion = try SplitShare.importFile(at: url, into: modelContext)
-            statusMessage = StatusMessage(
-                title: "Split Imported",
-                message: "\"\(occasion.name)\" is ready on this phone. No internet was required."
-            )
-        } catch {
-            statusMessage = StatusMessage(
-                title: "Import Failed",
-                message: error.localizedDescription
-            )
-        }
-    }
-
     private var emptyState: some View {
         ScrollView {
             VStack(spacing: 24) {
                 NoneState(
                     image: "person.3",
-                    message: "No groups yet. Create a group to start sharing expenses."
                 )
                 .frame(minHeight: 280)
 
@@ -412,19 +387,6 @@ private struct GroupsView: View {
             .buttonStyle(.borderedProminent)
             .tint(AppTheme.teal)
             .disabled(showingAddOccasion)
-
-            if groupOccasions.isEmpty {
-                Button {
-                    showingImporter = true
-                } label: {
-                    Text("Import from File")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.bordered)
-                .tint(AppTheme.teal)
-            }
         }
     }
 }
@@ -447,7 +409,7 @@ struct OccasionRowView: View {
                     .foregroundStyle(.primary)
 
                 HStack(spacing: 12) {
-                    Label(occasion.kind.title, systemImage: occasion.kind.symbol)
+                    Label(occasion.kindTitle, systemImage: occasion.listSymbol)
                     Label("\(occasion.uniqueMembers.count)", systemImage: "person.2")
                     Label(CurrencyFormat.string(from: occasion.totalSpent), systemImage: "dollarsign.circle")
                 }
@@ -485,7 +447,7 @@ struct OccasionRowView: View {
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         } else {
-            Image(systemName: occasion.kind.symbol)
+            Image(systemName: occasion.listSymbol)
                 .font(.body.weight(.semibold))
                 .foregroundStyle(AppTheme.teal)
                 .frame(width: 44, height: 44)

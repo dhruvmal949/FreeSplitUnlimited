@@ -41,6 +41,10 @@ enum OccasionAccess {
             : "freeSplit.privacy.claimedOwner"
     }
 
+    static var claimedOwnerID: UUID? {
+        UserDefaults.standard.string(forKey: claimedOwnerKey).flatMap(UUID.init(uuidString:))
+    }
+
     static func resetForTesting() {
         UserDefaults.standard.removeObject(forKey: claimedOwnerKey)
     }

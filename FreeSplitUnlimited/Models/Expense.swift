@@ -22,6 +22,11 @@ final class Expense {
     @Relationship(deleteRule: .cascade, inverse: \ExpenseShare.expense)
     var shares: [ExpenseShare] = []
 
+    /// Settle-up cash transfers are not group spending.
+    var isSettlementPayment: Bool {
+        title.localizedCaseInsensitiveCompare("Payment") == .orderedSame
+    }
+
     var splitMethod: SplitMethod {
         get { SplitMethod(rawValue: splitMethodRaw) ?? .equal }
         set { splitMethodRaw = newValue.rawValue }

@@ -165,7 +165,7 @@ final class LoginScreenUITests: XCTestCase {
         setText(app.secureTextFields["loginPasswordField"], firstPassword)
         dismissKeyboard(app)
         app.buttons["loginSignInButton"].tap()
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.navigationBars["Groups"].waitForExistence(timeout: 8))
 
         tapTab(app, "Settings")
         XCTAssertTrue(app.staticTexts["Pat Lee"].waitForExistence(timeout: 5))
@@ -187,7 +187,7 @@ final class LoginScreenUITests: XCTestCase {
         setText(app.secureTextFields["loginPasswordField"], firstPassword)
         dismissKeyboard(app)
         app.buttons["loginSignInButton"].tap()
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.navigationBars["Groups"].waitForExistence(timeout: 8))
 
         tapTab(app, "Settings")
         app.buttons["Sign Out"].tap()
@@ -208,7 +208,7 @@ final class LoginScreenUITests: XCTestCase {
         fillLogin(app, email: email, password: nextPassword)
         dismissKeyboard(app)
         app.buttons["loginSignInButton"].tap()
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.navigationBars["Groups"].waitForExistence(timeout: 8))
     }
 
     @MainActor
@@ -254,7 +254,7 @@ final class LoginScreenUITests: XCTestCase {
         setText(app.secureTextFields["loginPasswordField"], "secret1")
         dismissKeyboard(app)
         app.buttons["loginSignInButton"].tap()
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.navigationBars["Groups"].waitForExistence(timeout: 8))
 
         tapTab(app, "Settings")
         app.buttons["Sign Out"].tap()
@@ -264,7 +264,7 @@ final class LoginScreenUITests: XCTestCase {
         XCTAssertTrue(faceID.waitForExistence(timeout: 5), "Returning accounts should show Face ID")
         XCTAssertTrue(faceID.label.contains("Face ID"), "Face ID control label: \(faceID.label)")
         faceID.tap()
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.navigationBars["Groups"].waitForExistence(timeout: 8))
 
         tapTab(app, "Settings")
         XCTAssertTrue(app.staticTexts["Pat Lee"].waitForExistence(timeout: 5))

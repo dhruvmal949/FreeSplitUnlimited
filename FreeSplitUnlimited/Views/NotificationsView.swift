@@ -10,6 +10,7 @@ struct NotificationsView: View {
     @Query(sort: \Occasion.createdAt, order: .reverse)
     private var allOccasions: [Occasion]
     @ObservedObject private var session = AuthSession.shared
+    @State private var hiddenIDs = DeletedNotificationsStore.ids()
 
     private var occasions: [Occasion] {
         let identity = AccountIdentity(
@@ -22,48 +23,34 @@ struct NotificationsView: View {
         return allOccasions.filter { OccasionAccess.isVisible($0, as: identity) && seen.insert($0.id).inserted }
     }
 
-    private var events: [ActivityEvent] {
-        BalanceCalculator.activity(from: occasions)
+    private var feed: OverflowStack.Sections<ActivityEvent> {
+        NotificationFeed.sections(
+            from: BalanceCalculator.activity(from: occasions),
+            hiddenIDs: hiddenIDs
+        )
     }
 
     var body: some View {
         Group {
-            if events.isEmpty {
+            if feed.isEmpty {
                 NoneState(
                     image: "bell",
-                    message: "None. New splits and amounts paid will show up here."
+                    title: "No notifications"
                 )
             } else {
                 List {
-                    ForEach(events) { event in
-                        NavigationLink {
-                            if let occasion = occasions.first(where: { $0.id == event.occasionID }) {
-                                OccasionDetailView(occasion: occasion)
-                            } else {
-                                NoneState(image: "bell.slash", message: "None")
-                            }
-                        } label: {
-                            HStack(alignment: .top, spacing: 12) {
-                                Image(systemName: event.kind == .splitCreated ? "rectangle.stack.badge.plus" : "dollarsign.circle")
-                                    .font(.title3)
-                                    .foregroundStyle(AppTheme.teal)
-                                    .frame(width: 28)
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(event.title)
-                                        .font(.headline)
-                                        .foregroundStyle(.primary)
-                                    Text(event.subtitle)
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                    Text(event.date, style: .relative)
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
-                                }
-                            }
-                            .padding(.vertical, 4)
+                    Section {
+                        ForEach(feed.recent) { event in
+                            notificationLink(event)
                         }
-                        .listRowBackground(Color.white.opacity(0.78))
+                    }
+
+                    if feed.showsPaidStack {
+                        Section("Paid") {
+                            ForEach(feed.paid) { event in
+                                notificationLink(event)
+                            }
+                        }
                     }
                 }
                 .listStyle(.plain)
@@ -77,5 +64,49 @@ struct NotificationsView: View {
         .homeBackButton()
         .freeSplitBackground()
         .avoidsMainTabBar()
+        .onAppear {
+            hiddenIDs = DeletedNotificationsStore.ids()
+        }
+    }
+
+    private func notificationLink(_ event: ActivityEvent) -> some View {
+        NavigationLink {
+            if let occasion = occasions.first(where: { $0.id == event.occasionID }) {
+                OccasionDetailView(occasion: occasion)
+            } else {
+                NoneState(image: "bell.slash", title: "No notifications")
+            }
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: event.kind == .splitCreated ? "rectangle.stack.badge.plus" : "dollarsign.circle")
+                    .font(.title3)
+                    .foregroundStyle(AppTheme.teal)
+                    .frame(width: 28)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(event.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(event.subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text(event.date, format: .dateTime.month(.abbreviated).day().year())
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .listRowBackground(Color.white.opacity(0.78))
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button("Delete", role: .destructive) {
+                delete(event)
+            }
+        }
+    }
+
+    private func delete(_ event: ActivityEvent) {
+        DeletedNotificationsStore.remember(event.id)
+        hiddenIDs.insert(event.id)
     }
 }

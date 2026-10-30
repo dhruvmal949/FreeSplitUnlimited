@@ -15,6 +15,26 @@ struct SplitsBackupSnapshot: Codable {
     var version: Int = 1
     var savedAt: Date
     var occasions: [BackupOccasion]
+    var deletedIDs: [UUID] = []
+
+    enum CodingKeys: String, CodingKey {
+        case version, savedAt, occasions, deletedIDs
+    }
+
+    init(version: Int = 1, savedAt: Date, occasions: [BackupOccasion], deletedIDs: [UUID] = []) {
+        self.version = version
+        self.savedAt = savedAt
+        self.occasions = occasions
+        self.deletedIDs = deletedIDs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        savedAt = try container.decode(Date.self, forKey: .savedAt)
+        occasions = try container.decode([BackupOccasion].self, forKey: .occasions)
+        deletedIDs = try container.decodeIfPresent([UUID].self, forKey: .deletedIDs) ?? []
+    }
 }
 
 struct BackupOccasion: Codable {
@@ -147,7 +167,8 @@ enum SplitBackup {
             let occasions = try context.fetch(FetchDescriptor<Occasion>())
             let snapshot = SplitsBackupSnapshot(
                 savedAt: .now,
-                occasions: occasions.map(export(occasion:))
+                occasions: occasions.map(export(occasion:)),
+                deletedIDs: Array(DeletedGroupsStore.ids())
             )
             let data = try JSONEncoder().encode(snapshot)
             saveToKeychain(data)
@@ -155,6 +176,21 @@ enum SplitBackup {
             // NSUbiquitousKeyValueStore.default traps with brk #0x1 without them.
         } catch {
             print("Split backup failed: \(error)")
+        }
+    }
+
+    /// Keeps locally deleted groups hidden after login or a backup restore.
+    static func hideDeletedGroups(in context: ModelContext) {
+        let hidden = DeletedGroupsStore.ids()
+        guard !hidden.isEmpty else { return }
+        let occasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
+        var didChange = false
+        for occasion in occasions where hidden.contains(occasion.id) && !occasion.isDeleted {
+            occasion.isDeleted = true
+            didChange = true
+        }
+        if didChange {
+            try? context.save()
         }
     }
 
@@ -181,9 +217,14 @@ enum SplitBackup {
             return false
         }
 
+        DeletedGroupsStore.remember(snapshot.deletedIDs, notify: false)
         var seenIDs = Set<UUID>()
         for backup in snapshot.occasions {
             guard seenIDs.insert(backup.id).inserted else { continue }
+            if backup.isDeleted || DeletedGroupsStore.contains(backup.id) {
+                DeletedGroupsStore.remember(backup.id, notify: false)
+                continue
+            }
             importOccasion(backup, into: context)
         }
         do {

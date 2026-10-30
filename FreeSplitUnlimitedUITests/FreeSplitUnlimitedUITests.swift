@@ -13,12 +13,12 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
     }
 
     @MainActor
-    func testEndToEndFriendSplitBecomesGroup() throws {
+    func testEndToEndFriendSplitStaysOffHome() throws {
         let app = launchApp()
         allowSystemAlerts(app)
 
         signInWithNewAccount(app)
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.navigationBars["Groups"].waitForExistence(timeout: 8))
 
         // Friends + creates a one-person split, not a group.
         tapTab(app, "Friends")
@@ -31,15 +31,17 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         app.buttons["createSplitButton"].tap()
 
         XCTAssertTrue(app.staticTexts[friendName].waitForExistence(timeout: 6))
-        XCTAssertTrue(app.buttons["Add people"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["Back to friends"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 4))
+        XCTAssertFalse(app.buttons["Add people"].waitForExistence(timeout: 1))
 
         addExpense(app, title: "Dinner", amount: "40")
         XCTAssertTrue(app.staticTexts["Dinner"].waitForExistence(timeout: 5))
 
-        // One-to-one splits stay off Home until a third person is added.
-        app.buttons["Back to groups"].tap()
+        // One-to-one splits stay on Friends, not Home.
+        app.buttons["Back to friends"].tap()
         tapTab(app, "Groups")
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Groups"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts[friendName].waitForExistence(timeout: 1))
 
         tapTab(app, "Friends")
@@ -49,16 +51,12 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts[friendName].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["friendSharedGroup"].waitForExistence(timeout: 5))
         app.buttons["friendSharedGroup"].tap()
-        XCTAssertTrue(app.buttons["Add people"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Back to friends"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Add people"].waitForExistence(timeout: 1))
 
-        addPerson(app, named: "Blair")
-        XCTAssertFalse(
-            app.staticTexts["This split is just the two of you. Adding more people saves it as a group."].waitForExistence(timeout: 1)
-        )
-
-        app.buttons["Back to groups"].tap()
+        app.buttons["Back to friends"].tap()
         tapTab(app, "Groups")
-        XCTAssertTrue(app.staticTexts[friendName].waitForExistence(timeout: 5), "Adding a third person should save the split as a group on Home")
+        XCTAssertFalse(app.staticTexts[friendName].waitForExistence(timeout: 1), "A one-to-one split should stay off Home")
 
         // Home Create Group still makes a group immediately.
         app.buttons["Create Group"].firstMatch.tap()
@@ -70,7 +68,7 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         app.buttons["createGroupSubmit"].tap()
         XCTAssertTrue(app.staticTexts["Cabin Trip"].waitForExistence(timeout: 6))
         app.buttons["Back to groups"].tap()
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Groups"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Cabin Trip"].waitForExistence(timeout: 4))
 
         tapTab(app, "Notifications")
@@ -93,7 +91,7 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         let app = launchApp()
         allowSystemAlerts(app)
         signInWithNewAccount(app)
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.navigationBars["Groups"].waitForExistence(timeout: 8))
 
         app.buttons["Create Group"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["New Group"].waitForExistence(timeout: 5))
@@ -117,7 +115,7 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         app.buttons["deleteGroupButton"].tap()
         XCTAssertTrue(groupAlert.waitForExistence(timeout: 4))
         groupAlert.buttons["Yes"].tap()
-        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 6))
+        XCTAssertTrue(app.navigationBars["Groups"].waitForExistence(timeout: 6))
         XCTAssertFalse(app.staticTexts["Cabin Trip"].waitForExistence(timeout: 2))
 
         tapTab(app, "Friends")
@@ -126,9 +124,9 @@ final class FreeSplitUnlimitedUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["New Split"].waitForExistence(timeout: 5))
         addPerson(app, named: "Alex")
         app.buttons["createSplitButton"].tap()
-        XCTAssertTrue(app.buttons["Group settings"].waitForExistence(timeout: 6))
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 6))
 
-        app.buttons["Group settings"].tap()
+        app.buttons["Settings"].tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
         app.buttons["deleteGroupButton"].tap()
         let friendAlert = app.alerts["Are you sure you want to delete?"]

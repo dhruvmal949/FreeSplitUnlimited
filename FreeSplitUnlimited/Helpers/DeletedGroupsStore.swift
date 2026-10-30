@@ -25,13 +25,19 @@ enum DeletedGroupsStore {
     }
 
     static func remember(_ id: UUID, notify: Bool = true) {
+        remember([id], notify: notify)
+    }
+
+    static func remember(_ incoming: [UUID], notify: Bool = true) {
         var next = ids()
-        let inserted = next.insert(id).inserted
-        if inserted {
-            UserDefaults.standard.set(next.map(\.uuidString), forKey: key)
+        var inserted = false
+        for id in incoming {
+            inserted = next.insert(id).inserted || inserted
         }
-        guard notify, inserted else { return }
-        NotificationCenter.default.post(name: .freeSplitDidHideGroups, object: id)
+        guard inserted else { return }
+        UserDefaults.standard.set(next.map(\.uuidString), forKey: key)
+        guard notify else { return }
+        NotificationCenter.default.post(name: .freeSplitDidHideGroups, object: incoming.first)
     }
 
     static func resetForTesting() {

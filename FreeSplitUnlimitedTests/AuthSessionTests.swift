@@ -328,6 +328,63 @@ final class AuthSessionTests: XCTestCase {
         XCTAssertNil(AppleIdentityStore.load(userID: "apple.user.delete"))
     }
 
+    func testSavedFriendsDoNotCarryToTheNextAccount() {
+        session.finishSocialLogin(
+            provider: .apple,
+            name: "Pat Lee",
+            email: "pat@example.com",
+            login: "pat.saved.friends"
+        )
+        KnownFriendsStore.remember([
+            PickedContact(name: "Suresh", phone: "5551234567")
+        ])
+        XCTAssertNotNil(KnownFriendsStore.contact(named: "Suresh"))
+
+        session.signOut()
+        session.finishSocialLogin(
+            provider: .google,
+            name: "Alex Kim",
+            email: "alex@gmail.com",
+            login: "alex.saved.friends"
+        )
+        XCTAssertNil(KnownFriendsStore.contact(named: "Suresh"))
+    }
+
+    func testPairingNicknameDoesNotFollowTheNextAccount() {
+        session.finishSocialLogin(
+            provider: .apple,
+            name: "Pat Lee",
+            email: "pat@example.com",
+            login: "pat.pairing"
+        )
+        session.setPairingNickname("Pat")
+        XCTAssertTrue(session.selfNames.contains { FriendPairing.namesMatch($0, "Pat") })
+
+        session.signOut()
+        session.finishSocialLogin(
+            provider: .google,
+            name: "Alex Kim",
+            email: "alex@gmail.com",
+            login: "alex.pairing"
+        )
+        XCTAssertFalse(session.selfNames.contains { FriendPairing.namesMatch($0, "Pat") })
+        XCTAssertFalse(session.selfNames.contains { FriendPairing.namesMatch($0, "Pat Lee") })
+    }
+
+    func testDeleteAccountRemovesSavedFriends() {
+        session.finishSocialLogin(
+            provider: .apple,
+            name: "Pat Lee",
+            email: "pat@privaterelay.appleid.com",
+            login: "pat.delete.friends"
+        )
+        KnownFriendsStore.remember([
+            PickedContact(name: "Suresh", phone: "5551234567")
+        ])
+        session.deleteCurrentAccount()
+        XCTAssertNil(KnownFriendsStore.contact(named: "Suresh"))
+    }
+
     func testAppleIdentityIsRememberedForLaterSignIns() {
         AppleIdentityStore.resetForTesting()
         AppleIdentityStore.save(userID: "apple.user.1", email: "hidden@privaterelay.appleid.com", name: "Pat Lee")
