@@ -36,8 +36,20 @@ struct OccasionDetailView: View {
             .sorted { $0.date > $1.date }
     }
 
+    private var spendingExpenseCount: Int {
+        spendingExpenses.count
+    }
+
+    private var spendingExpenses: [Expense] {
+        sortedExpenses.filter { !$0.isSettlementPayment }
+    }
+
     private var balances: [PersonBalance] {
         BalanceCalculator.balances(for: occasion)
+    }
+
+    private var outstandingBalances: [PersonBalance] {
+        balances.filter { $0.net != 0 }
     }
 
     private var settlements: [Settlement] {
@@ -201,23 +213,34 @@ struct OccasionDetailView: View {
     private var heroHeader: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
-                headerCircleButton(systemImage: "chevron.left", label: "Back to groups") {
+                headerCircleButton(
+                    systemImage: "chevron.left",
+                    label: occasion.appearsInGroups ? "Back to groups" : "Back to friends"
+                ) {
                     dismiss()
                 }
                 Spacer()
-                headerCircleButton(systemImage: "person.badge.plus", label: "Add people") {
-                    Task { await presentMemberPicker() }
+                if !occasion.isOneToOne || isAlone {
+                    headerCircleButton(systemImage: "person.badge.plus", label: "Add people") {
+                        presentMemberPicker()
+                    }
                 }
-                headerCircleButton(systemImage: "square.and.arrow.up", label: "Share group") {
+                headerCircleButton(
+                    systemImage: "square.and.arrow.up",
+                    label: occasion.isOneToOne ? "Share split" : "Share group"
+                ) {
                     shareSplit()
                 }
-                headerCircleButton(systemImage: "gearshape.fill", label: "Group settings") {
+                headerCircleButton(
+                    systemImage: "gearshape.fill",
+                    label: occasion.isOneToOne ? "Settings" : "Group settings"
+                ) {
                     NotificationCenter.default.post(name: .freeSplitOpenGroupSettings, object: occasion.id)
                 }
             }
 
             if isEditingName {
-                TextField("Group name", text: $draftName)
+                TextField(occasion.isOneToOne ? "Name" : "Group name", text: $draftName)
                     .font(.system(.largeTitle, design: .rounded, weight: .bold))
                     .foregroundStyle(.white)
                     .tint(.white)
@@ -240,7 +263,7 @@ struct OccasionDetailView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Edit group name")
+                .accessibilityLabel(occasion.isOneToOne ? "Edit name" : "Edit group name")
                 .accessibilityIdentifier("editGroupName")
             }
         }
@@ -316,7 +339,7 @@ struct OccasionDetailView: View {
         VStack {
             VStack(spacing: 16) {
                 Button {
-                    Task { await presentMemberPicker() }
+                    presentMemberPicker()
                 } label: {
                     Label("Add people", systemImage: "person.badge.plus")
                         .font(.headline)
@@ -349,20 +372,14 @@ struct OccasionDetailView: View {
 
     private var expensesTab: some View {
         Group {
-            if sortedExpenses.isEmpty, !occasion.isOneToOne {
+            if spendingExpenses.isEmpty {
                 ContentUnavailableView(
                     "No Expenses",
-                    systemImage: "cart",
-                    description: Text("Tap Add expense to log something someone paid for.")
+                    systemImage: "cart"
                 )
             } else {
                 List {
-                    if sortedExpenses.isEmpty {
-                        Text("Tap Add expense to log something someone paid for.")
-                            .foregroundStyle(.secondary)
-                            .listRowBackground(Color.clear)
-                    } else {
-                        ForEach(sortedExpenses, id: \.id) { expense in
+                        ForEach(spendingExpenses, id: \.id) { expense in
                             Button {
                                 editingExpenseID = expense.id
                             } label: {
@@ -371,8 +388,7 @@ struct OccasionDetailView: View {
                             .buttonStyle(.plain)
                             .listRowBackground(Color.white.opacity(0.78))
                         }
-                        .onDelete(perform: deleteExpenses)
-                    }
+                        .onDelete(perform: deleteSpendingExpenses)
                 }
                 .freeSplitListStyle()
             }
@@ -380,79 +396,91 @@ struct OccasionDetailView: View {
     }
 
     private var settleUpTab: some View {
-        List {
-            Section {
-                if settlements.isEmpty {
-                    Text("Everyone is settled up.")
-                        .foregroundStyle(.secondary)
-                        .listRowBackground(Color.white.opacity(0.78))
-                } else {
-                    ForEach(settlements) { settlement in
-                        Button {
-                            paymentToRecord = PendingGroupPayment(
-                                payerName: settlement.from.name,
-                                receiverName: settlement.to.name,
-                                amount: settlement.amount
-                            )
-                        } label: {
-                            HStack(alignment: .firstTextBaseline) {
-                                Text("\(settlement.from.name) → \(settlement.to.name)")
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                                Text(CurrencyFormat.string(from: settlement.amount))
-                                    .fontWeight(.semibold)
-                                    .foregroundStyle(.primary)
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
+        Group {
+            if settlements.isEmpty {
+                ContentUnavailableView(
+                    "No payments",
+                    systemImage: "checkmark.circle"
+                )
+            } else {
+                List {
+                    Section {
+                        ForEach(settlements) { settlement in
+                            Button {
+                                paymentToRecord = PendingGroupPayment(
+                                    payerName: settlement.from.name,
+                                    receiverName: settlement.to.name,
+                                    amount: settlement.amount
+                                )
+                            } label: {
+                                HStack(alignment: .firstTextBaseline) {
+                                    Text("\(memberDisplayName(settlement.from.name)) → \(memberDisplayName(settlement.to.name))")
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    Text(CurrencyFormat.string(from: settlement.amount))
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(.primary)
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.tertiary)
+                                }
                             }
+                            .buttonStyle(.plain)
+                            .listRowBackground(Color.white.opacity(0.78))
                         }
-                        .buttonStyle(.plain)
-                        .listRowBackground(Color.white.opacity(0.78))
                     }
                 }
+                .freeSplitListStyle()
             }
         }
-        .freeSplitListStyle()
     }
 
     private var whoIsOwedTab: some View {
-        List {
-            Section("Who is owed") {
-                ForEach(balances) { balance in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(balance.person.name)
-                            if balance.person.hasContactInfo {
-                                Text([balance.person.email, balance.person.phone].filter { !$0.isEmpty }.joined(separator: " · "))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+        Group {
+            if outstandingBalances.isEmpty {
+                ContentUnavailableView(
+                    "No Balances",
+                    systemImage: "scalemass"
+                )
+            } else {
+                List {
+                    ForEach(outstandingBalances) { balance in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(memberDisplayName(balance.person.name))
+                                if balance.person.hasContactInfo {
+                                    Text([balance.person.email, balance.person.phone].filter { !$0.isEmpty }.joined(separator: " · "))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                            Spacer()
+                            Text(balanceLabel(for: balance.net))
+                                .foregroundStyle(balanceColor(for: balance.net))
+                                .fontWeight(.semibold)
                         }
-                        Spacer()
-                        Text(balanceLabel(for: balance.net))
-                            .foregroundStyle(balanceColor(for: balance.net))
-                            .fontWeight(.semibold)
-                    }
-                    .listRowBackground(Color.white.opacity(0.78))
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        if FriendPairing.isUsableName(balance.person.name) {
-                            Button("Delete", role: .destructive) {
-                                personToRemove = balance.person
+                        .listRowBackground(Color.white.opacity(0.78))
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            if !occasion.isOneToOne,
+                               occasion.uniqueMembers.count > 2,
+                               FriendPairing.isUsableName(balance.person.name) {
+                                Button("Delete", role: .destructive) {
+                                    personToRemove = balance.person
+                                }
                             }
                         }
                     }
                 }
+                .freeSplitListStyle()
             }
         }
-        .freeSplitListStyle()
     }
 
     private var totalTab: some View {
         VStack(spacing: 8) {
             Text(CurrencyFormat.string(from: occasion.totalSpent))
                 .font(.system(.largeTitle, design: .rounded, weight: .bold))
-            Text("\(occasion.kind.title) · \(occasion.expenses.count) expense\(occasion.expenses.count == 1 ? "" : "s")")
+            Text("\(occasion.kindTitle) · \(spendingExpenseCount) expense\(spendingExpenseCount == 1 ? "" : "s")")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             if !occasion.note.isEmpty {
@@ -466,9 +494,7 @@ struct OccasionDetailView: View {
         .frame(maxWidth: .infinity)
     }
 
-    @MainActor
-    private func presentMemberPicker() async {
-        await ContactAuthorization.requestIfNeeded()
+    private func presentMemberPicker() {
         contactsAllowed = ContactAuthorization.canUseSystemPicker
         showingAddMember = true
     }
@@ -564,9 +590,13 @@ struct OccasionDetailView: View {
         AppTheme.balanceColor(for: net)
     }
 
-    private func deleteExpenses(at offsets: IndexSet) {
+    private func memberDisplayName(_ name: String) -> String {
+        FriendPairing.isSelf(name, selfNames: myNames) ? "You" : name
+    }
+
+    private func deleteSpendingExpenses(at offsets: IndexSet) {
         for index in offsets {
-            modelContext.delete(sortedExpenses[index])
+            modelContext.delete(spendingExpenses[index])
         }
         occasion.touch()
         modelContext.persist()
@@ -585,7 +615,9 @@ struct OccasionDetailView: View {
         Task {
             let payload = await SplitShare.activityPayload(for: occasion)
             if payload.link == nil, payload.fileURL == nil {
-                shareAlert = "Couldn't create a share link for this group."
+                shareAlert = occasion.isOneToOne
+                    ? "Couldn't create a share link for this split."
+                    : "Couldn't create a share link for this group."
                 return
             }
             sharePayload = payload
@@ -620,6 +652,11 @@ private struct PendingGroupPayment: Identifiable {
 private struct ExpenseRowView: View {
     let expense: Expense
 
+    private var payerLabel: String {
+        let name = expense.paidBy?.name ?? "Unknown"
+        return FriendPairing.isSelf(name, selfNames: AuthSession.shared.selfNames) ? "You" : name
+    }
+
     var body: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
@@ -633,7 +670,7 @@ private struct ExpenseRowView: View {
                         .foregroundStyle(.primary)
                 }
 
-                Text("Paid by \(expense.paidBy?.name ?? "Unknown")")
+                Text("Paid by \(payerLabel)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 

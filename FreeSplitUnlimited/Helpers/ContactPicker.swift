@@ -12,19 +12,8 @@ import SwiftUI
 import UIKit
 
 enum ContactAuthorization {
-    /// First tap shows Apple's popup: Full Access, Select Contacts (limited), or Don't Allow.
-    @MainActor
-    static func requestIfNeeded() async {
-        guard !AppLaunchFlags.isUITesting else { return }
-        let status = CNContactStore.authorizationStatus(for: .contacts)
-        guard status == .notDetermined else { return }
-        do {
-            _ = try await CNContactStore().requestAccess(for: .contacts)
-        } catch {
-            print("Contacts access request failed: \(error)")
-        }
-    }
-
+    /// True when this iPhone already allowed Contacts (full or a chosen subset).
+    /// Add people does not ask for this; `CNContactPickerViewController` works without it.
     static var canUseSystemPicker: Bool {
         switch CNContactStore.authorizationStatus(for: .contacts) {
         case .authorized, .limited:
@@ -105,14 +94,6 @@ struct SystemContactPicker: UIViewControllerRepresentable {
                 CNContactEmailAddressesKey,
                 CNContactPhoneNumbersKey
             ]
-            picker.predicateForEnablingContact = NSPredicate(
-                format: "phoneNumbers.@count > 0 OR emailAddresses.@count > 0"
-            )
-            picker.predicateForSelectionOfProperty = NSPredicate(
-                format: "key == %@ OR key == %@",
-                CNContactPhoneNumbersKey,
-                CNContactEmailAddressesKey
-            )
             isShowingPicker = true
             presenter.present(picker, animated: true)
         }
@@ -135,9 +116,9 @@ struct SystemContactPicker: UIViewControllerRepresentable {
             }
         }
 
-        func contactPicker(_ picker: CNContactPickerViewController, didSelect contactProperty: CNContactProperty) {
+        func contactPicker(_ picker: CNContactPickerViewController, didSelect contact: CNContact) {
             finishPresented()
-            let picked = Self.pickedContact(from: contactProperty)
+            let picked = PickedContact(contact: contact)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
                 if let picked {
                     self.onPick(picked)
@@ -150,27 +131,6 @@ struct SystemContactPicker: UIViewControllerRepresentable {
         func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
             finishPresented()
             DispatchQueue.main.async { self.onCancel() }
-        }
-
-        private static func pickedContact(from property: CNContactProperty) -> PickedContact? {
-            guard let picked = PickedContact(contact: property.contact) else { return nil }
-            switch property.key {
-            case CNContactPhoneNumbersKey:
-                guard let phone = (property.value as? CNPhoneNumber)?.stringValue else { return picked.resolvedContact() ?? picked }
-                return picked.selectingPhone(phone)
-            case CNContactEmailAddressesKey:
-                let email: String
-                if let value = property.value as? String {
-                    email = value
-                } else if let value = property.value as? NSString {
-                    email = value as String
-                } else {
-                    return picked.resolvedContact() ?? picked
-                }
-                return picked.selectingEmail(email)
-            default:
-                return picked.resolvedContact() ?? picked
-            }
         }
     }
 }
@@ -416,7 +376,9 @@ enum ContactDirectory {
     static func searchContacts(matching query: String) -> [PickedContact] {
         guard ContactAuthorization.canUseSystemPicker else { return [] }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 1 else { return [] }
+        if trimmed.isEmpty {
+            return listedContacts(limit: 40)
+        }
         let store = CNContactStore()
         var seen = Set<String>()
         var results: [PickedContact] = []
@@ -452,6 +414,23 @@ enum ContactDirectory {
             }
         }
         return results
+    }
+
+    /// Contacts this account may read: everyone if Access was allowed, or only the chosen subset.
+    private static func listedContacts(limit: Int) -> [PickedContact] {
+        let store = CNContactStore()
+        let request = CNContactFetchRequest(keysToFetch: keys)
+        request.sortOrder = .givenName
+        var results: [PickedContact] = []
+        var seen = Set<String>()
+        try? store.enumerateContacts(with: request) { contact, stop in
+            guard let picked = PickedContact(contact: contact), seen.insert(picked.id).inserted else { return }
+            results.append(picked)
+            if results.count >= limit { stop.pointee = true }
+        }
+        return results.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
     }
 }
 
@@ -593,7 +572,7 @@ struct FriendSearchPicker: View {
     }
 
     private var placeholder: String {
-        usingContacts ? "Search name, email, or phone" : "Search saved friends"
+        "Search saved friends"
     }
 
     private var typedNameToAdd: String? {
@@ -623,6 +602,7 @@ struct FriendSearchPicker: View {
     }
 
     private func requestAdd(_ friend: PickedContact) {
+        searchFocused = false
         let alreadySelected = selected.contains {
             $0.id == friend.id
                 || $0.personID != nil && $0.personID == friend.personID
@@ -675,12 +655,6 @@ struct FriendSearchPicker: View {
 
     private var results: [PickedContact] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        var matches: [PickedContact] = []
-
-        if usingContacts, trimmed.count >= 1 {
-            matches.append(contentsOf: ContactDirectory.searchContacts(matching: trimmed))
-        }
-
         let saved: [PickedContact]
         if trimmed.isEmpty {
             saved = savedFriends
@@ -692,11 +666,10 @@ struct FriendSearchPicker: View {
                     || $0.contactSummary.localizedStandardContains(trimmed)
             }
         }
-        matches.append(contentsOf: saved)
 
         var seen = Set<String>()
         let selectedKeys = Set(selected.map { $0.name.lowercased() })
-        return matches.filter { candidate in
+        return saved.filter { candidate in
             let key = candidate.name.lowercased()
             guard seen.insert(key).inserted else { return false }
             if candidate.isMe { return false }
@@ -743,6 +716,7 @@ struct FriendSearchPicker: View {
 
                     Section {
                         Button {
+                            searchFocused = false
                             showingSystemPicker = true
                         } label: {
                             Label("Choose a contact", systemImage: "person.crop.circle.badge.plus")
@@ -750,11 +724,8 @@ struct FriendSearchPicker: View {
                         .accessibilityIdentifier("chooseOneContact")
                     }
 
-                    Section(usingContacts ? "From your contacts" : "Saved friends") {
-                        if results.isEmpty {
-                            Text(emptyResultsText)
-                                .foregroundStyle(.secondary)
-                        } else {
+                    if !results.isEmpty {
+                        Section {
                             ForEach(results) { friend in
                                 friendRow(friend, isSelected: false) {
                                     requestAdd(friend)
@@ -766,6 +737,7 @@ struct FriendSearchPicker: View {
                 .listStyle(.insetGrouped)
                 .scrollContentBackground(.hidden)
                 .contentMargins(.bottom, 12, for: .scrollContent)
+                .scrollDismissesKeyboard(.immediately)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .freeSplitBackground()
@@ -785,7 +757,7 @@ struct FriendSearchPicker: View {
                 }
             }
             .onAppear {
-                searchFocused = true
+                searchFocused = false
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 guard ContactAuthorization.canUseSystemPicker else { return }
@@ -894,16 +866,6 @@ struct FriendSearchPicker: View {
             onRemoveExisting(friendToRemove)
         }
         self.friendToRemove = nil
-    }
-
-    private var emptyResultsText: String {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return usingContacts
-                ? "Search to add other friends, or choose one contact."
-                : "No other saved friends yet. Choose a contact, or type a name to add someone."
-        }
-        return "No matches for “\(trimmed)”."
     }
 
     private func addedFriendRow(_ friend: PickedContact) -> some View {

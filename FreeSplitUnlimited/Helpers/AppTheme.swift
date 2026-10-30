@@ -282,10 +282,23 @@ extension View {
 
 struct NoneState: View {
     var image: String
-    var message: String
+    var title: String? = nil
+    var message: String = ""
 
     var body: some View {
-        ContentUnavailableView("None", systemImage: image, description: Text(message))
+        if let title, !title.isEmpty {
+            if message.isEmpty {
+                ContentUnavailableView(title, systemImage: image)
+            } else {
+                ContentUnavailableView(title, systemImage: image, description: Text(message))
+            }
+        } else {
+            Image(systemName: image)
+                .font(.system(size: 56, weight: .light))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -317,12 +330,10 @@ struct HomeBackButton: View {
 
 extension View {
     func homeBackButton() -> some View {
-        self
-            .navigationBarBackButtonHidden(true)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    HomeBackButton()
-                }
+        self.toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                HomeBackButton()
             }
+        }
     }
 }

@@ -15,7 +15,7 @@ enum FriendBalanceFilter: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .none: return "None"
+        case .none: return "All"
         case .outstanding: return "Friends with outstanding balances"
         case .youOwe: return "Friends you owe"
         case .owedToYou: return "Friends who owe you"
@@ -42,7 +42,7 @@ enum GroupBalanceFilter: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .none: return "None"
+        case .none: return "All"
         case .outstanding: return "Groups with outstanding balances"
         case .youOwe: return "Group balances you owe"
         case .owedToYou: return "Group balances you are owed"
@@ -65,7 +65,9 @@ struct OverallBalanceBanner: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            overallText
+            if net != 0 {
+                overallText
+            }
             Spacer(minLength: 8)
             Button(action: onFilter) {
                 Image(systemName: "line.3.horizontal.decrease")

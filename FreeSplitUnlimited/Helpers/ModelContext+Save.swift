@@ -5,27 +5,18 @@
 
 import SwiftData
 
+private enum PersistFollowUp {
+    static var generation = 0
+}
+
 extension ModelContext {
-    /// Persist changes immediately, back them up so splits can survive reinstall,
-    /// and propagate the change to other phones via mesh + cloud sync.
+    /// Persist changes immediately, then back them up and sync after the UI can move on.
     @MainActor
     func persist() {
         do {
-            let people = (try? fetch(FetchDescriptor<Person>())) ?? []
-            for person in people where person.hasContactInfo {
-                person.setContact(email: person.email, phone: person.phone)
-            }
             try save()
-            let occasions = (try? fetch(FetchDescriptor<Occasion>())) ?? []
-            for occasion in occasions where occasion.isDeleted {
-                occasion.isDeleted = true
-            }
-            if occasions.contains(where: \.isDeleted) {
-                try save()
-            }
-            SplitBackup.save(from: self)
             KnownFriendsStore.remember(from: self)
-            SyncCoordinator.shared.notifyLocalChange()
+            schedulePersistFollowUp()
         } catch {
             print("Failed to save Free Split data: \(error)")
         }
@@ -39,11 +30,21 @@ extension ModelContext {
         occasion.markDeleted()
         do {
             try save()
-            SplitBackup.save(from: self)
             KnownFriendsStore.remember(from: self)
+            SplitBackup.save(from: self)
             SyncCoordinator.shared.notifyLocalChange()
         } catch {
             print("Failed to delete group: \(error)")
+        }
+    }
+
+    private func schedulePersistFollowUp() {
+        PersistFollowUp.generation += 1
+        let generation = PersistFollowUp.generation
+        Task { @MainActor in
+            guard generation == PersistFollowUp.generation else { return }
+            SplitBackup.save(from: self)
+            SyncCoordinator.shared.notifyLocalChange()
         }
     }
 }

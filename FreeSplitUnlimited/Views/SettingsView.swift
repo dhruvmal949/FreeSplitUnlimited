@@ -15,12 +15,14 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-                Section("Nearby sync") {
-                    NearbySyncBanner(mesh: mesh) {
-                        SyncCoordinator.shared.syncNow()
+                if AppLaunchFlags.nearbySyncEnabled {
+                    Section("Nearby sync") {
+                        NearbySyncBanner(mesh: mesh) {
+                            SyncCoordinator.shared.syncNow()
+                        }
+                        .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                        .listRowBackground(Color.clear)
                     }
-                    .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-                    .listRowBackground(Color.clear)
                 }
 
                 Section("Account") {

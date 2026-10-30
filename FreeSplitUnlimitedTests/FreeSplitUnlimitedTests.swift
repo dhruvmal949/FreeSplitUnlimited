@@ -171,6 +171,32 @@ final class FreeSplitUnlimitedTests: XCTestCase {
         XCTAssertEqual(BalanceCalculator.net(withFriend: "Ramesh", in: occasion), 0)
     }
 
+    func testTotalSpentIgnoresSettlementPayments() {
+        let me = Person(name: "Me")
+        let praveen = Person(name: "Praveen")
+        let occasion = Occasion(name: "Trip")
+        occasion.members = [me, praveen]
+        occasion.expenses = [
+            Expense(
+                title: "Dinner",
+                amount: 200,
+                splitMethod: .equal,
+                paidBy: me,
+                participants: [me, praveen]
+            )
+        ]
+        XCTAssertEqual(occasion.totalSpent, 200)
+
+        BalanceCalculator.recordDirectedPayment(
+            amount: 50,
+            payerName: "Praveen",
+            receiverName: "Me",
+            in: occasion
+        )
+        XCTAssertEqual(occasion.totalSpent, 200)
+        XCTAssertEqual(BalanceCalculator.net(withFriend: "Praveen", in: occasion), 50)
+    }
+
     func testPercentageSplitBalances() throws {
         let occasion = Occasion(name: "Groceries")
         let mom = Person(name: "Mom")
@@ -328,6 +354,17 @@ final class FreeSplitUnlimitedTests: XCTestCase {
         DeletedGroupsStore.resetForTesting()
     }
 
+    func testDeletedGroupIDsAreStoredInBackupSnapshot() throws {
+        DeletedGroupsStore.resetForTesting()
+        let id = UUID()
+        DeletedGroupsStore.remember(id, notify: false)
+        let snapshot = SplitsBackupSnapshot(savedAt: .now, occasions: [], deletedIDs: Array(DeletedGroupsStore.ids()))
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(SplitsBackupSnapshot.self, from: data)
+        XCTAssertTrue(decoded.deletedIDs.contains(id))
+        DeletedGroupsStore.resetForTesting()
+    }
+
     func testDeletedFriendSplitIsHiddenFromFriends() {
         DeletedGroupsStore.resetForTesting()
         let occasion = Occasion(name: "Alex", groupType: SplitKind.oneToOne)
@@ -369,5 +406,125 @@ final class FreeSplitUnlimitedTests: XCTestCase {
         XCTAssertEqual(GoogleOAuth.authCode(from: url), "abc123")
         let denied = URL(string: "com.pramela.freesplitunlimited:/oauth2redirect?error=access_denied")!
         XCTAssertNil(GoogleOAuth.authCode(from: denied))
+    }
+
+    func testPaidNotificationsStayWithRecentUntilThereAreMoreThanFifteen() {
+        let events = activityEvents(paid: 10, created: 4)
+        let feed = NotificationFeed.sections(from: events)
+        XCTAssertEqual(feed.recent.count, 14)
+        XCTAssertTrue(feed.paid.isEmpty)
+        XCTAssertFalse(feed.showsPaidStack)
+    }
+
+    func testPaidNotificationsBeyondFifteenMoveToPaidStack() {
+        let events = activityEvents(paid: 18, created: 2)
+        let feed = NotificationFeed.sections(from: events)
+        XCTAssertEqual(feed.recent.count, 17)
+        XCTAssertEqual(feed.paid.count, 3)
+        XCTAssertTrue(feed.showsPaidStack)
+        XCTAssertTrue(feed.paid.allSatisfy { $0.kind == .amountPaid })
+        XCTAssertEqual(feed.recent.filter { $0.kind == .splitCreated }.count, 2)
+    }
+
+    func testDeletedNotificationsAreHiddenFromFeed() {
+        DeletedNotificationsStore.resetForTesting()
+        let events = activityEvents(paid: 3, created: 1)
+        DeletedNotificationsStore.remember(events[0].id)
+        let feed = NotificationFeed.sections(from: events, hiddenIDs: DeletedNotificationsStore.ids())
+        XCTAssertEqual(feed.recent.count, 3)
+        XCTAssertFalse(feed.recent.contains { $0.id == events[0].id })
+        DeletedNotificationsStore.resetForTesting()
+    }
+
+    func testSettledFriendsStayWithRecentUntilThereAreMoreThanFifteen() {
+        let friends = friendSummaries(outstanding: 10, settled: 4)
+        let feed = FriendFeed.sections(from: friends)
+        XCTAssertEqual(feed.recent.count, 14)
+        XCTAssertTrue(feed.paid.isEmpty)
+        XCTAssertFalse(feed.showsPaidStack)
+    }
+
+    func testSettledFriendsBeyondFifteenMoveToPaidStack() {
+        let friends = friendSummaries(outstanding: 2, settled: 18)
+        let feed = FriendFeed.sections(from: friends)
+        XCTAssertEqual(feed.recent.count, 17)
+        XCTAssertEqual(feed.paid.count, 3)
+        XCTAssertTrue(feed.showsPaidStack)
+        XCTAssertTrue(feed.paid.allSatisfy { $0.net == 0 })
+        XCTAssertEqual(feed.recent.filter { $0.net != 0 }.count, 2)
+    }
+
+    func testExistingOneToOneIsReusedByFriendName() {
+        let occasion = Occasion(name: "Alex", groupType: SplitKind.oneToOne)
+        occasion.members = [Person(name: "Me"), Person(name: "Alex")]
+        let found = FriendPairing.existingOccasion(
+            friendName: "alex",
+            selfNames: ["Me", "Pat"],
+            in: [occasion]
+        )
+        XCTAssertEqual(found?.id, occasion.id)
+    }
+
+    func testEmptyOneToOneDisplayNameIsUntitledSplit() {
+        let occasion = Occasion(name: "  ", groupType: SplitKind.oneToOne)
+        XCTAssertEqual(occasion.displayName, "Untitled split")
+        XCTAssertEqual(occasion.kindTitle, "Split")
+    }
+
+    private func activityEvents(paid: Int, created: Int) -> [ActivityEvent] {
+        let occasionID = UUID()
+        var items: [ActivityEvent] = []
+        for index in 0..<paid {
+            items.append(
+                ActivityEvent(
+                    id: "paid-\(index)",
+                    date: Date().addingTimeInterval(TimeInterval(-index)),
+                    kind: .amountPaid,
+                    title: "Paid \(index)",
+                    subtitle: "Dinner",
+                    occasionID: occasionID
+                )
+            )
+        }
+        for index in 0..<created {
+            items.append(
+                ActivityEvent(
+                    id: "created-\(index)",
+                    date: Date().addingTimeInterval(TimeInterval(-(paid + index))),
+                    kind: .splitCreated,
+                    title: "Split created",
+                    subtitle: "Trip",
+                    occasionID: occasionID
+                )
+            )
+        }
+        return items.sorted { $0.date > $1.date }
+    }
+
+    private func friendSummaries(outstanding: Int, settled: Int) -> [FriendSummary] {
+        var items: [FriendSummary] = []
+        for index in 0..<settled {
+            items.append(
+                FriendSummary(
+                    id: "paid-\(index)",
+                    name: "Paid \(index)",
+                    net: 0,
+                    occasionIDs: [],
+                    occasionNames: ["Trip"]
+                )
+            )
+        }
+        for index in 0..<outstanding {
+            items.append(
+                FriendSummary(
+                    id: "owe-\(index)",
+                    name: "Owe \(index)",
+                    net: Decimal(index + 1),
+                    occasionIDs: [],
+                    occasionNames: ["Trip"]
+                )
+            )
+        }
+        return items
     }
 }

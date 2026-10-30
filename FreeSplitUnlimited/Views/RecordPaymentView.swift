@@ -76,9 +76,21 @@ struct RecordPaymentView: View {
         }
         let payer = displayName(payerName)
         let receiver = displayName(receiverName)
-        if payer == "you" { return "You paid \(receiver)" }
-        if receiver == "you" { return "\(payer) paid you" }
-        return "\(payer) paid \(receiver)"
+        if payer == "you" { return "You pay \(receiver)" }
+        if receiver == "you" { return "\(payer) pays you" }
+        return "\(payer) pays \(receiver)"
+    }
+
+    private var confirmMessage: String {
+        let payer = displayName(payerName)
+        let receiver = displayName(receiverName)
+        if payer == "you" {
+            return "Record that you paid \(settledWithName)."
+        }
+        if receiver == "you" {
+            return "Record that \(settledWithName) paid you."
+        }
+        return "Record that \(payer) paid \(receiver)."
     }
 
     var body: some View {
@@ -142,7 +154,7 @@ struct RecordPaymentView: View {
                 Button("No", role: .cancel) {}
                 Button("Yes") { recordPayment() }
             } message: {
-                Text("You have settled the amount to \(settledWithName).")
+                Text(confirmMessage)
             }
             .onAppear {
                 if amountText.isEmpty {
@@ -200,7 +212,7 @@ struct RecordPaymentView: View {
     }
 
     private var commentField: some View {
-        TextField("Enter how you settle the payment(optional)", text: $comment, axis: .vertical)
+            TextField("Enter how you settle the payment (optional)", text: $comment, axis: .vertical)
             .lineLimit(2...4)
             .textInputAutocapitalization(.sentences)
             .padding(12)
