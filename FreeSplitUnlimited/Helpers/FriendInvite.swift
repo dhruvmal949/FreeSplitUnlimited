@@ -275,7 +275,6 @@ struct FriendInvitePresenter: ViewModifier {
     @State private var queue: [ComposePayload] = []
     @State private var current: ComposePayload?
     @State private var isRunning = false
-    @State private var isPublishing = false
     @State private var isPresentingComposer = false
     @State private var systemPayload: ComposePayload?
     @State private var pendingEmailReturn: ComposePayload?
@@ -315,23 +314,18 @@ struct FriendInvitePresenter: ViewModifier {
             if !isRunning { onFinished() }
             return
         }
-        guard !isPublishing else { return }
-        isPublishing = true
-        Task { @MainActor in
-            defer { isPublishing = false }
-            let joinURL = await FriendInvite.publishedJoinURL(for: occasion, splitName: splitName)
-            let payloads = FriendInvite.payloads(for: contacts, splitName: splitName, joinURL: joinURL)
-            guard !payloads.isEmpty else {
-                if !isRunning { onFinished() }
-                return
-            }
-            for payload in payloads where !alreadyQueued(payload) {
-                queue.append(payload)
-            }
-            guard !isRunning else { return }
-            isRunning = true
-            presentNext()
+        let joinURL = FriendInvite.joinURL(for: occasion, splitName: splitName)
+        let payloads = FriendInvite.payloads(for: contacts, splitName: splitName, joinURL: joinURL)
+        guard !payloads.isEmpty else {
+            if !isRunning { onFinished() }
+            return
         }
+        for payload in payloads where !alreadyQueued(payload) {
+            queue.append(payload)
+        }
+        guard !isRunning else { return }
+        isRunning = true
+        presentNext()
     }
 
     private func alreadyQueued(_ payload: ComposePayload) -> Bool {

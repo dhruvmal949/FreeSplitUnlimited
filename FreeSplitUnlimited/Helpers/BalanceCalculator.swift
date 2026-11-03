@@ -254,7 +254,7 @@ enum BalanceCalculator {
             var seenExpenseIDs = Set<UUID>()
             for expense in occasion.expenses where seenExpenseIDs.insert(expense.id).inserted {
                 let payer = expense.paidBy?.name ?? "Someone"
-                let isPayment = expense.title.localizedCaseInsensitiveCompare("Payment") == .orderedSame
+                let isPayment = expense.isSettlementPayment
                 let counterpart = expense.uniqueParticipants.first(where: { $0.name != payer })?.name
                     ?? occasion.name
                 let subtitle: String
@@ -306,6 +306,53 @@ struct ActivityEvent: Identifiable {
     let title: String
     let subtitle: String
     let occasionID: UUID
+}
+
+enum OverflowStack {
+    static let recentLimit = 15
+
+    struct Sections<Item> {
+        var recent: [Item]
+        var paid: [Item]
+        var isEmpty: Bool { recent.isEmpty && paid.isEmpty }
+        var showsPaidStack: Bool { !paid.isEmpty }
+    }
+
+    /// Keeps the first 15 items in the main list. Extra paid cells go into a
+    /// separate Paid stack on the same screen.
+    static func sections<Item>(from items: [Item], isPaid: (Item) -> Bool) -> Sections<Item> {
+        guard items.count > recentLimit else {
+            return Sections(recent: items, paid: [])
+        }
+        var recent: [Item] = []
+        var paid: [Item] = []
+        for (index, item) in items.enumerated() {
+            if index >= recentLimit, isPaid(item) {
+                paid.append(item)
+            } else {
+                recent.append(item)
+            }
+        }
+        return Sections(recent: recent, paid: paid)
+    }
+}
+
+enum NotificationFeed {
+    static func sections(from events: [ActivityEvent], hiddenIDs: Set<String> = []) -> OverflowStack.Sections<ActivityEvent> {
+        OverflowStack.sections(
+            from: events.filter { !hiddenIDs.contains($0.id) },
+            isPaid: { $0.kind == .amountPaid }
+        )
+    }
+}
+
+enum FriendFeed {
+    static func sections(from friends: [FriendSummary], hiddenIDs: Set<String> = []) -> OverflowStack.Sections<FriendSummary> {
+        OverflowStack.sections(
+            from: friends.filter { !hiddenIDs.contains($0.id) },
+            isPaid: { $0.net == 0 }
+        )
+    }
 }
 
 enum CurrencyFormat {

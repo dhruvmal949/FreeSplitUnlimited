@@ -38,6 +38,7 @@ final class SyncCoordinator: ObservableObject {
 
     /// Turns on nearby discovery. Safe to call more than once.
     func startNearby() {
+        guard AppLaunchFlags.nearbySyncEnabled else { return }
         guard let context else { return }
         didStart = true
         MeshSyncService.shared.start(context: context)
@@ -46,7 +47,7 @@ final class SyncCoordinator: ObservableObject {
 
     /// Re-start nearby discovery when the app comes back to the foreground.
     func resume() {
-        guard didStart else { return }
+        guard AppLaunchFlags.nearbySyncEnabled, didStart else { return }
         MeshSyncService.shared.resume()
         startCloudIfNeeded()
     }
@@ -54,7 +55,7 @@ final class SyncCoordinator: ObservableObject {
     /// Call right after any local edit is saved. Broadcasts to nearby peers immediately;
     /// pushes to CloudKit too, but only if that's enabled (see `cloudKitEnabled`).
     func notifyLocalChange() {
-        guard didStart else { return }
+        guard AppLaunchFlags.nearbySyncEnabled, didStart else { return }
         MeshSyncService.shared.broadcastLocalChanges()
         guard cloudKitEnabled, let context else { return }
         let occasions = (try? context.fetch(FetchDescriptor<Occasion>())) ?? []
@@ -66,6 +67,7 @@ final class SyncCoordinator: ObservableObject {
 
     /// Manual nearby sync: start radios if needed, rediscover peers, push current splits.
     func syncNow() {
+        guard AppLaunchFlags.nearbySyncEnabled else { return }
         startNearby()
         MeshSyncService.shared.restartDiscovery()
         guard cloudKitEnabled else { return }

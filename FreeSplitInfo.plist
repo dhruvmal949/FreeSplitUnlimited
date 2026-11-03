@@ -85,7 +85,7 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>Free Split uses Face ID to open your existing account on this iPhone.</string>
 	<key>NSContactsUsageDescription</key>
-	<string>Free Split uses your contacts so you can add friends to a split. You can allow all contacts or only the ones you choose.</string>
+	<string>Free Split uses Contacts so you can pick a friend to add to a split.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Free Split uses your local network to sync splits directly with nearby friends' phones — no internet or AirDrop needed.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

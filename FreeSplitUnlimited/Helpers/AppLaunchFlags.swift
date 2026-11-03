@@ -30,4 +30,8 @@ enum AppLaunchFlags {
     /// Email, phone, and password login stay in the project but are hidden
     /// until that flow is finished. The app currently signs in with Google or Apple.
     static let passwordLoginEnabled = false
+
+    /// Nearby Bluetooth sync stays in the project but is hidden for App Review
+    /// until it is reliable enough. Turn this on after release to restore it.
+    static let nearbySyncEnabled = false
 }

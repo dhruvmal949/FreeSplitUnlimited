@@ -82,11 +82,22 @@ final class Occasion {
 
     var displayName: String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Untitled group" : trimmed
+        if trimmed.isEmpty {
+            return isOneToOne ? "Untitled split" : "Untitled group"
+        }
+        return trimmed
     }
 
     var kind: GroupKind {
         GroupKind.resolve(groupType)
+    }
+
+    var kindTitle: String {
+        isOneToOne ? "Split" : kind.title
+    }
+
+    var listSymbol: String {
+        isOneToOne ? "person.fill" : kind.symbol
     }
 
     /// Friends-tab splits start as one-to-one until a third person is added.
@@ -124,7 +135,9 @@ final class Occasion {
     }
 
     var totalSpent: Decimal {
-        expenses.reduce(0) { $0 + $1.amount }
+        expenses.reduce(0) { total, expense in
+            expense.isSettlementPayment ? total : total + expense.amount
+        }
     }
 
     /// Unique members (guards against SwiftData relationship duplicates).

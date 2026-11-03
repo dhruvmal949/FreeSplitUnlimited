@@ -106,7 +106,7 @@ struct AddExpenseView: View {
             Form {
                 Section {
                     HStack {
-                        Text("Group")
+                        Text(occasion.appearsInGroups ? "Group" : "Split")
                         Spacer()
                         Text(occasion.displayName)
                             .fontWeight(.semibold)
@@ -121,7 +121,7 @@ struct AddExpenseView: View {
                     TextField("Amount (e.g. 55 or $55)", text: $amountText)
                         .keyboardType(.decimalPad)
                         .accessibilityIdentifier("expenseAmountField")
-                    DatePicker("Date", selection: $date, displayedComponents: .date)
+                    DatePicker("Date", selection: $date, in: ...Date(), displayedComponents: .date)
                 }
 
                 Section("Paid by") {
@@ -150,8 +150,6 @@ struct AddExpenseView: View {
                     }
                     .pickerStyle(.segmented)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                } footer: {
-                    Text(splitMethod.detail)
                 }
 
                 Section {
@@ -175,8 +173,6 @@ struct AddExpenseView: View {
                     }
                 } header: {
                     Text("Split between")
-                } footer: {
-                    footerText
                 }
 
                 Section {
@@ -254,7 +250,8 @@ struct AddExpenseView: View {
 
     private var missingContactMessage: String {
         let names = peopleMissingContact.map(\.name).joined(separator: ", ")
-        return "\(names) \(peopleMissingContact.count == 1 ? "has" : "have") no email or phone. Add contact info in Group Settings so they can be reached, or save this expense anyway."
+        let settings = occasion.isOneToOne ? "Settings" : "Group Settings"
+        return "\(names) \(peopleMissingContact.count == 1 ? "has" : "have") no email or phone. Add contact info in \(settings) so they can be reached, or save this expense anyway."
     }
 
     private func requestSave() {
@@ -329,17 +326,6 @@ struct AddExpenseView: View {
             }
         }
         .padding(.vertical, 2)
-    }
-
-    private var footerText: Text {
-        switch splitMethod {
-        case .equal:
-            return Text("Each selected person owes an equal share.")
-        case .percentage:
-            return Text("Percents must add up to 100%. With two people, the other share fills in automatically.")
-        case .parts:
-            return Text("Enter parts for each person. Example: Mom 2, Dad 1 → Mom pays 2/3.")
-        }
     }
 
     private func binding(for id: UUID) -> Binding<String> {
@@ -459,6 +445,15 @@ struct AddExpenseView: View {
             shareValues = loadedShares
             if splitMethod != .equal, loadedShares.isEmpty {
                 ensureDefaultShares(for: Array(selectedParticipantIDs), method: splitMethod)
+            }
+        } else {
+            if paidByID == nil {
+                paidByID = sortedMembers.first {
+                    FriendPairing.isSelf($0.name, selfNames: AuthSession.shared.selfNames)
+                }?.id
+            }
+            if selectedParticipantIDs.isEmpty {
+                selectedParticipantIDs = Set(sortedMembers.map(\.id))
             }
         }
     }

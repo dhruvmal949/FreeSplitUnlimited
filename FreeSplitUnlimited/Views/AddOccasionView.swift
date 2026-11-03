@@ -86,7 +86,7 @@ struct AddOccasionView: View {
 
                 Section {
                     Button {
-                        Task { await presentFriendPicker() }
+                        presentFriendPicker()
                     } label: {
                         Label("Add Friends", systemImage: "magnifyingglass")
                     }
@@ -139,14 +139,9 @@ struct AddOccasionView: View {
         }
     }
 
-    @MainActor
-    private func presentFriendPicker() async {
+    private func presentFriendPicker() {
         guard !showingFriendPicker else { return }
-        await ContactAuthorization.requestIfNeeded()
-        try? await Task.sleep(for: .milliseconds(250))
-        guard !showingFriendPicker else { return }
-        let allowed = ContactAuthorization.canUseSystemPicker
-        contactsAllowed = allowed
+        contactsAllowed = ContactAuthorization.canUseSystemPicker
         showingFriendPicker = true
     }
 
@@ -183,14 +178,12 @@ struct AddOccasionView: View {
         )
         var people = friends
             .filter { $0.isComplete && !$0.isSelf }
-            .map { draft -> Person in
-                let person = Person(
+            .map { draft in
+                Person(
                     name: draft.trimmedName,
                     email: draft.email.trimmingCharacters(in: .whitespacesAndNewlines),
                     phone: draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
-                person.setContact(email: draft.email, phone: draft.phone)
-                return person
             }
         if !people.contains(where: { FriendPairing.isPlaceholderSelf($0.name) }) {
             people.insert(Person(name: "Me"), at: 0)

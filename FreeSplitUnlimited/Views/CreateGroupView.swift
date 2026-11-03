@@ -38,7 +38,7 @@ struct CreateGroupView: View {
     }
 
     private var canCreate: Bool {
-        true
+        !trimmedName.isEmpty && !visibleFriends.isEmpty
     }
 
     var body: some View {
@@ -59,7 +59,7 @@ struct CreateGroupView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(AppTheme.teal)
-                    .disabled(isCreating)
+                    .disabled(!canCreate || isCreating)
                     .accessibilityIdentifier("createGroupSubmit")
                     .padding(.top, 4)
                     .padding(.bottom, 12)
@@ -222,7 +222,7 @@ struct CreateGroupView: View {
                 }
 
                 Button {
-                    Task { await presentFriendPicker() }
+                    presentFriendPicker()
                 } label: {
                     Label("Add people", systemImage: "person.badge.plus")
                         .font(.subheadline.weight(.semibold))
@@ -236,11 +236,7 @@ struct CreateGroupView: View {
         }
     }
 
-    @MainActor
-    private func presentFriendPicker() async {
-        guard !showingFriendPicker else { return }
-        await ContactAuthorization.requestIfNeeded()
-        try? await Task.sleep(for: .milliseconds(250))
+    private func presentFriendPicker() {
         guard !showingFriendPicker else { return }
         contactsAllowed = ContactAuthorization.canUseSystemPicker
         showingFriendPicker = true
@@ -282,23 +278,11 @@ struct CreateGroupView: View {
         guard let item else { return }
         guard let data = try? await item.loadTransferable(type: Data.self),
               let image = UIImage(data: data) else { return }
-        let prepared = Self.preparedCover(from: image)
+        let prepared = GroupCoverStore.prepared(from: image)
         await MainActor.run {
             coverImage = prepared.image
             coverImageData = prepared.data
         }
-    }
-
-    private static func preparedCover(from image: UIImage) -> (image: UIImage, data: Data?) {
-        let maxSide: CGFloat = 512
-        let longest = max(image.size.width, image.size.height)
-        let scale = longest > maxSide ? maxSide / longest : 1
-        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let resized = renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
-        }
-        return (resized, resized.jpegData(compressionQuality: 0.72))
     }
 
     private func createGroup() {
@@ -311,14 +295,12 @@ struct CreateGroupView: View {
             groupType: (kind ?? .other).rawValue
         )
 
-        var people = visibleFriends.map { draft -> Person in
-            let person = Person(
+        var people = visibleFriends.map { draft in
+            Person(
                 name: draft.trimmedName,
                 email: draft.email.trimmingCharacters(in: .whitespacesAndNewlines),
                 phone: draft.phone.trimmingCharacters(in: .whitespacesAndNewlines)
             )
-            person.setContact(email: draft.email, phone: draft.phone)
-            return person
         }
         if !people.contains(where: { $0.name.localizedCaseInsensitiveCompare("Me") == .orderedSame }) {
             people.insert(Person(name: "Me"), at: 0)

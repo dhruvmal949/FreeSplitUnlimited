@@ -17,6 +17,7 @@ struct FriendsView: View {
     @State private var pendingOpenGroupID: UUID?
     @State private var openedGroupID: OpenedGroup?
     @State private var hiddenSplitIDs = DeletedGroupsStore.ids()
+    @State private var hiddenFriendIDs = DeletedFriendsStore.ids()
     @Environment(\.modelContext) private var modelContext
 
     private struct OpenedGroup: Identifiable, Hashable {
@@ -40,10 +41,15 @@ struct FriendsView: View {
 
     private var friends: [FriendSummary] {
         BalanceCalculator.friendSummaries(from: occasions, myNames: session.selfNames)
+            .filter { !hiddenFriendIDs.contains($0.id) }
     }
 
     private var visibleFriends: [FriendSummary] {
         friends.filter { filter.matches($0.net) }
+    }
+
+    private var feed: OverflowStack.Sections<FriendSummary> {
+        FriendFeed.sections(from: visibleFriends)
     }
 
     private var overallNet: Decimal {
@@ -55,7 +61,7 @@ struct FriendsView: View {
             if friends.isEmpty {
                 NoneState(
                     image: "person",
-                    message: "No one-to-one friends yet. Tap + to start a split with one person."
+                    title: "No friends"
                 )
             } else {
                 List {
@@ -73,13 +79,18 @@ struct FriendsView: View {
                             .foregroundStyle(.secondary)
                             .listRowBackground(Color.clear)
                     } else {
-                        ForEach(visibleFriends) { friend in
-                            NavigationLink {
-                                FriendDetailView(summary: friend, occasions: occasions)
-                            } label: {
-                                friendRow(friend)
+                        Section {
+                            ForEach(feed.recent) { friend in
+                                friendLink(friend)
                             }
-                            .listRowBackground(Color.white.opacity(0.78))
+                        }
+
+                        if feed.showsPaidStack {
+                            Section("Paid") {
+                                ForEach(feed.paid) { friend in
+                                    friendLink(friend)
+                                }
+                            }
                         }
                     }
                 }
@@ -124,12 +135,13 @@ struct FriendsView: View {
             if let occasion = occasions.first(where: { $0.id == token.id }) {
                 OccasionDetailView(occasion: occasion)
             } else {
-                NoneState(image: "person.3", message: "This group isn’t available.")
+                NoneState(image: "person.3", message: "This split isn’t available.")
                     .homeBackButton()
             }
         }
         .onAppear {
             hiddenSplitIDs = DeletedGroupsStore.ids()
+            hiddenFriendIDs = DeletedFriendsStore.ids()
             DispatchQueue.main.async {
                 persistHiddenSplits()
             }
@@ -158,6 +170,35 @@ struct FriendsView: View {
         for occasion in stale {
             modelContext.removeGroup(occasion)
         }
+    }
+
+    private func friendLink(_ friend: FriendSummary) -> some View {
+        NavigationLink {
+            FriendDetailView(summary: friend, occasions: occasions)
+        } label: {
+            friendRow(friend)
+        }
+        .listRowBackground(Color.white.opacity(0.78))
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button("Delete", role: .destructive) {
+                delete(friend)
+            }
+        }
+    }
+
+    private func oneToOneSplits(for friend: FriendSummary) -> [Occasion] {
+        occasions.filter { occasion in
+            occasion.isOneToOne && friend.occasionIDs.contains(occasion.id)
+        }
+    }
+
+    private func delete(_ friend: FriendSummary) {
+        for occasion in oneToOneSplits(for: friend) {
+            modelContext.removeGroup(occasion)
+        }
+        DeletedFriendsStore.remember(friend.id)
+        hiddenFriendIDs.insert(friend.id)
+        hiddenSplitIDs = DeletedGroupsStore.ids()
     }
 
     private func friendRow(_ friend: FriendSummary) -> some View {
@@ -202,13 +243,8 @@ private struct FriendDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var session = AuthSession.shared
     @State private var showingBreakdown = true
-    @State private var selectedAction: FriendAction = .request
     @State private var openedSplit: OpenedSplit?
     @State private var showingRecordPayment = false
-
-    private enum FriendAction {
-        case request, settle
-    }
 
     private struct OpenedSplit: Identifiable, Hashable {
         let id: UUID
@@ -226,10 +262,6 @@ private struct FriendDetailView: View {
 
     private var overallNet: Decimal {
         sharedOccasions.reduce(0) { $0 + net(in: $1) }
-    }
-
-    private var primaryOccasion: Occasion? {
-        sharedOccasions.first { net(in: $0) != 0 } ?? sharedOccasions.first
     }
 
     var body: some View {
@@ -274,9 +306,7 @@ private struct FriendDetailView: View {
                 OccasionDetailView(occasion: occasion)
             }
         }
-        .fullScreenCover(isPresented: $showingRecordPayment, onDismiss: {
-            selectedAction = .request
-        }) {
+        .fullScreenCover(isPresented: $showingRecordPayment) {
             RecordPaymentView(
                 friendName: summary.name,
                 overallNet: overallNet,
@@ -356,7 +386,9 @@ private struct FriendDetailView: View {
                 .font(.system(.largeTitle, design: .rounded, weight: .bold))
                 .foregroundStyle(.primary)
                 .padding(.top, 36)
-            overallHeader
+            if overallNet != 0 {
+                overallHeader
+            }
             if showingBreakdown {
                 breakdown
             }
@@ -458,35 +490,21 @@ private struct FriendDetailView: View {
     }
 
     private var actionPills: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                if primaryOccasion != nil {
-                    pill("Request", selected: selectedAction == .request) {
-                        selectedAction = .request
-                    }
-                }
-                pill("Settle up", selected: selectedAction == .settle) {
-                    selectedAction = .settle
+        Group {
+            if overallNet != 0 {
+                Button {
                     showingRecordPayment = true
+                } label: {
+                    Text("Settle up")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .foregroundStyle(Color.white)
+                        .background(AppTheme.teal, in: Capsule())
                 }
+                .buttonStyle(.plain)
             }
         }
-    }
-
-    private func pill(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 16)
-                .padding(.vertical, 9)
-                .foregroundStyle(selected ? Color.white : Color.primary)
-                .background(selected ? AppTheme.teal : Color.clear, in: Capsule())
-                .overlay {
-                    Capsule()
-                        .stroke(Color.secondary.opacity(0.28), lineWidth: selected ? 0 : 1)
-                }
-        }
-        .buttonStyle(.plain)
     }
 
     private func friendGroupRow(_ occasion: Occasion) -> some View {
@@ -533,7 +551,7 @@ private struct FriendDetailView: View {
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         } else {
-            Image(systemName: occasion.kind.symbol)
+            Image(systemName: occasion.listSymbol)
                 .font(.body.weight(.semibold))
                 .foregroundStyle(AppTheme.teal)
                 .frame(width: 44, height: 44)

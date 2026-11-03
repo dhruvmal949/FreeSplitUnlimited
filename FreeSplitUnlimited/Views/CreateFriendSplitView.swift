@@ -11,6 +11,8 @@ struct CreateFriendSplitView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    @Query(sort: \Occasion.createdAt, order: .reverse)
+    private var allOccasions: [Occasion]
 
     @State private var friendName = ""
     @State private var friendEmail = ""
@@ -56,7 +58,7 @@ struct CreateFriendSplitView: View {
                         }
 
                         Button {
-                            Task { await presentFriendPicker() }
+                            presentFriendPicker()
                         } label: {
                             Label("Add people", systemImage: "person.badge.plus")
                                 .font(.subheadline.weight(.semibold))
@@ -69,7 +71,7 @@ struct CreateFriendSplitView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
 
-                    Text("Start with one friend. Add people later to turn this into a group.")
+                    Text("Start with one friend.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
@@ -132,11 +134,7 @@ struct CreateFriendSplitView: View {
         )
     }
 
-    @MainActor
-    private func presentFriendPicker() async {
-        guard !showingFriendPicker else { return }
-        await ContactAuthorization.requestIfNeeded()
-        try? await Task.sleep(for: .milliseconds(250))
+    private func presentFriendPicker() {
         guard !showingFriendPicker else { return }
         contactsAllowed = ContactAuthorization.canUseSystemPicker
         showingFriendPicker = true
@@ -153,8 +151,32 @@ struct CreateFriendSplitView: View {
         guard canCreate, !isCreating else { return }
         isCreating = true
 
+        let selfNames = AuthSession.shared.selfNames
+        let live = allOccasions.filter { $0.shouldAppearInLists }
+        DeletedFriendsStore.forget(trimmedFriendName.lowercased())
+
+        if let existing = FriendPairing.existingOccasion(
+            friendName: trimmedFriendName,
+            selfNames: selfNames,
+            in: live
+        ) {
+            pendingCreatedID = existing.id
+            createdOccasion = existing
+            finishCreateIfNeeded()
+            return
+        }
+
+        let pairingName = AuthSession.shared.pairingName
+        var occasionID = FriendPairing.isUsableName(pairingName)
+            ? FriendPairing.occasionID(pairingName, trimmedFriendName)
+            : UUID()
+        if DeletedGroupsStore.contains(occasionID) {
+            occasionID = UUID()
+        }
+
         let occasion = Occasion(
             name: trimmedFriendName,
+            id: occasionID,
             groupType: SplitKind.oneToOne
         )
         let friendPerson = Person(

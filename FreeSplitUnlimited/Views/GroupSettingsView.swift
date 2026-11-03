@@ -3,8 +3,10 @@
 //  FreeSplitUnlimited
 //
 
-import SwiftUI
+import PhotosUI
 import SwiftData
+import SwiftUI
+import UIKit
 
 struct GroupSettingsView: View {
     @Bindable var occasion: Occasion
@@ -17,12 +19,45 @@ struct GroupSettingsView: View {
     @State private var kind: GroupKind = .other
     @State private var showingDeleteConfirm = false
     @State private var personToRemove: Person?
-    @State private var inviteContacts: [PickedContact] = []
+    @State private var personToEdit: Person?
+    @State private var photoItem: PhotosPickerItem?
+    @State private var coverImage: UIImage?
+    @State private var coverImageData: Data?
 
     var body: some View {
         NavigationStack {
             Form {
                 Section(occasion.isOneToOne ? "Split" : "Group") {
+                    if !occasion.isOneToOne {
+                        PhotosPicker(selection: $photoItem, matching: .images) {
+                            HStack(spacing: 14) {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(AppTheme.lightAqua)
+                                    if let coverImage {
+                                        Image(uiImage: coverImage)
+                                            .resizable()
+                                            .scaledToFill()
+                                    } else {
+                                        Image(systemName: occasion.listSymbol)
+                                            .font(.title3.weight(.semibold))
+                                            .foregroundStyle(AppTheme.deepTeal)
+                                    }
+                                }
+                                .frame(width: 52, height: 52)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(coverImage == nil ? "Add a group photo" : "Change group photo")
+                                        .foregroundStyle(.primary)
+                                    Text("Used on Groups")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                        }
+                    }
                     TextField("Name", text: $name)
                         .textInputAutocapitalization(.words)
                     TextField("Note", text: $note)
@@ -37,35 +72,33 @@ struct GroupSettingsView: View {
 
                 Section("People") {
                     ForEach(occasion.sortedMembers().filter { FriendPairing.isUsableName($0.name) }, id: \.id) { person in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(person.name)
-                                if person.hasContactInfo {
-                                    Text([person.email, person.phone].filter { !$0.isEmpty }.joined(separator: " · "))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                } else if FriendPairing.isUsableName(person.name) {
-                                    Text("No email or phone")
-                                        .font(.caption)
-                                        .foregroundStyle(.orange)
+                        Button {
+                            personToEdit = person
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(person.name)
+                                        .foregroundStyle(.primary)
+                                    if person.hasContactInfo {
+                                        Text([person.email, person.phone].filter { !$0.isEmpty }.joined(separator: " · "))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    } else {
+                                        Text("No email or phone")
+                                            .font(.caption)
+                                            .foregroundStyle(.orange)
+                                    }
                                 }
-                            }
-                            Spacer()
-                            if FriendPairing.isUsableName(person.name), person.hasContactInfo {
-                                VStack(spacing: 4) {
-                                    Toggle("Notify", isOn: notifyBinding(for: person))
-                                        .labelsHidden()
-                                        .tint(AppTheme.teal)
-                                        .disabled(person.didInvite)
-                                        .accessibilityLabel(person.didInvite ? "Invite sent" : "Send invite")
-                                    Text(person.didInvite ? "Sent" : "Notify")
-                                        .font(.caption2)
-                                        .foregroundStyle(person.didInvite ? AppTheme.teal : .secondary)
-                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
                             }
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                            if FriendPairing.isUsableName(person.name) {
+                            if !occasion.isOneToOne,
+                               occasion.uniqueMembers.count > 2,
+                               FriendPairing.isUsableName(person.name) {
                                 Button("Delete", role: .destructive) {
                                     personToRemove = person
                                 }
@@ -97,13 +130,22 @@ struct GroupSettingsView: View {
                 name = occasion.name
                 note = occasion.note
                 kind = occasion.kind
+                if coverImage == nil {
+                    coverImage = GroupCoverStore.image(for: occasion.id)
+                    coverImageData = GroupCoverStore.data(for: occasion.id)
+                }
             }
-            .friendInvite(
-                contacts: $inviteContacts,
-                splitName: occasion.displayName,
-                occasion: occasion,
-                onSent: markInviteSent
-            )
+            .onChange(of: photoItem) { _, item in
+                Task { await loadPhoto(from: item) }
+            }
+            .sheet(isPresented: Binding(
+                get: { personToEdit != nil },
+                set: { if !$0 { personToEdit = nil } }
+            )) {
+                if let personToEdit {
+                    EditFriendView(occasion: occasion, person: personToEdit)
+                }
+            }
             .confirmationDialog(
                 "Remove \(personToRemove?.name ?? "this person")?",
                 isPresented: Binding(
@@ -147,6 +189,7 @@ struct GroupSettingsView: View {
         occasion.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
         if !occasion.isOneToOne {
             occasion.groupType = kind.rawValue
+            GroupCoverStore.save(coverImageData, for: occasion.id)
         }
         occasion.touch()
         modelContext.persist()
@@ -163,29 +206,14 @@ struct GroupSettingsView: View {
         )
     }
 
-    private func notifyBinding(for person: Person) -> Binding<Bool> {
-        Binding(
-            get: { person.didInvite },
-            set: { isOn in
-                guard isOn, !person.didInvite else { return }
-                inviteContacts = [
-                    PickedContact(
-                        id: person.id.uuidString,
-                        name: person.name,
-                        email: person.email,
-                        phone: person.phone,
-                        personID: person.id,
-                        didInvite: false
-                    )
-                ]
-            }
-        )
-    }
-
-    private func markInviteSent(_ id: UUID) {
-        guard let person = occasion.uniqueMembers.first(where: { $0.id == id }) else { return }
-        person.didInvite = true
-        occasion.touch()
-        modelContext.persist()
+    private func loadPhoto(from item: PhotosPickerItem?) async {
+        guard let item else { return }
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let image = UIImage(data: data) else { return }
+        let prepared = GroupCoverStore.prepared(from: image)
+        await MainActor.run {
+            coverImage = prepared.image
+            coverImageData = prepared.data
+        }
     }
 }

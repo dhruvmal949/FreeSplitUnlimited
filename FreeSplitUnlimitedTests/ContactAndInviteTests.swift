@@ -337,14 +337,17 @@ final class FriendInviteTests: XCTestCase {
     }
 }
 
+@MainActor
 final class KnownFriendsStoreTests: XCTestCase {
     override func setUp() {
         super.setUp()
+        AuthSession.shared.resetForTesting()
         KnownFriendsStore.resetForTesting()
     }
 
     override func tearDown() {
         KnownFriendsStore.resetForTesting()
+        AuthSession.shared.resetForTesting()
         super.tearDown()
     }
 
@@ -372,6 +375,46 @@ final class KnownFriendsStoreTests: XCTestCase {
         let saved = KnownFriendsStore.contact(named: "Blair")
         XCTAssertEqual(ContactUniqueness.phoneKey(saved?.phone ?? ""), "5553334444")
         XCTAssertNotNil(saved?.resolvedContact())
+    }
+
+    func testSavedFriendsStayWithTheAccountThatAddedThem() {
+        let first = UUID()
+        let second = UUID()
+        KnownFriendsStore.accountOverrideForTesting = first
+        KnownFriendsStore.remember([
+            PickedContact(name: "Suresh", phone: "5551234567")
+        ])
+
+        KnownFriendsStore.accountOverrideForTesting = second
+        XCTAssertNil(KnownFriendsStore.contact(named: "Suresh"))
+
+        KnownFriendsStore.accountOverrideForTesting = first
+        XCTAssertEqual(
+            ContactUniqueness.phoneKey(KnownFriendsStore.contact(named: "Suresh")?.phone ?? ""),
+            "5551234567"
+        )
+    }
+
+    func testPeopleFromAnotherAccountsGroupAreNotRemembered() {
+        let ownerID = UUID()
+        let otherID = UUID()
+        KnownFriendsStore.accountOverrideForTesting = otherID
+        let cabin = Occasion(name: "Cabin")
+        cabin.ownerAccountID = ownerID
+        cabin.members = [
+            Person(name: "Me"),
+            Person(name: "Suresh", phone: "5551234567")
+        ]
+        KnownFriendsStore.rememberPeople(
+            from: [cabin],
+            as: AccountIdentity(
+                accountID: otherID,
+                email: "zoe@example.com",
+                phone: "",
+                names: ["Zoe"]
+            )
+        )
+        XCTAssertNil(KnownFriendsStore.contact(named: "Suresh"))
     }
 }
 

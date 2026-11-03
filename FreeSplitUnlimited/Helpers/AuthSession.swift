@@ -185,7 +185,7 @@ final class AuthSession: ObservableObject {
     func setPairingNickname(_ raw: String) {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         pairingNickname = FriendPairing.isUsableName(name) ? name : ""
-        UserDefaults.standard.set(pairingNickname, forKey: Self.pairingNameKey)
+        persistPairingNickname()
     }
 
     private static var keychainService: String {
@@ -234,7 +234,7 @@ final class AuthSession: ObservableObject {
     private init() {
         rememberMe = UserDefaults.standard.object(forKey: Self.rememberMeKey) as? Bool ?? false
         prefersFaceIDLogin = UserDefaults.standard.bool(forKey: Self.prefersFaceIDKey)
-        pairingNickname = UserDefaults.standard.string(forKey: Self.pairingNameKey) ?? ""
+        pairingNickname = ""
         isAuthenticated = false
         isGuest = false
         if AppLaunchFlags.isUITesting {
@@ -268,6 +268,7 @@ final class AuthSession: ObservableObject {
         wipeTestingAuthStore()
         BiometricAuth.resetOverrides()
         OccasionAccess.resetForTesting()
+        KnownFriendsStore.resetForTesting()
     }
 
     var rememberedLogin: String {
@@ -678,6 +679,7 @@ final class AuthSession: ObservableObject {
         isGuest = false
         provider = .guest
         displayName = ""
+        pairingNickname = ""
         email = ""
         lastError = nil
         needsGoogleEmailConfirmation = false
@@ -690,6 +692,7 @@ final class AuthSession: ObservableObject {
         suppressFaceIDUntil = Date().addingTimeInterval(Self.signOutFaceIDCooldown)
         suppressFaceIDAutoPrompt = true
         clearPersistedSession()
+        syncDataScope()
     }
 
     /// Guideline 5.1.1(v): remove this sign-in and its local account data from the phone.
@@ -710,6 +713,10 @@ final class AuthSession: ObservableObject {
         AppleIdentityStore.remove(email: mail)
         OccasionAccess.resetClaimIfOwned(by: id)
         removeStableAccountID(email: mail, login: login)
+        if let id {
+            KnownFriendsStore.removeAccount(id)
+            UserDefaults.standard.removeObject(forKey: pairingStorageKey(for: id))
+        }
 
         pairingNickname = ""
         prefersFaceIDLogin = false
@@ -791,13 +798,63 @@ final class AuthSession: ObservableObject {
         if guest {
             currentLogin = ""
             currentAccountID = nil
+            pairingNickname = ""
             clearUnlockSession()
         } else {
             guestAccountID = nil
             if currentAccountID == nil {
                 currentAccountID = Self.stableAccountID(email: email, login: currentLogin)
             }
+            refreshPairingNickname()
             saveUnlockSession()
+        }
+        syncDataScope()
+    }
+
+    private func syncDataScope() {
+        KnownFriendsStore.signedInAccountID = accountID
+    }
+
+    private func pairingStorageKey(for accountID: UUID) -> String {
+        Self.pairingNameKey + "." + accountID.uuidString
+    }
+
+    private func persistPairingNickname() {
+        if let accountID = currentAccountID {
+            UserDefaults.standard.set(pairingNickname, forKey: pairingStorageKey(for: accountID))
+        } else {
+            UserDefaults.standard.set(pairingNickname, forKey: Self.pairingNameKey)
+        }
+    }
+
+    private func refreshPairingNickname() {
+        guard let accountID = currentAccountID else {
+            pairingNickname = ""
+            return
+        }
+        if let saved = UserDefaults.standard.string(forKey: pairingStorageKey(for: accountID)),
+           FriendPairing.isUsableName(saved) {
+            pairingNickname = saved
+            return
+        }
+        if let legacy = UserDefaults.standard.string(forKey: Self.pairingNameKey),
+           FriendPairing.isUsableName(legacy) {
+            let claimed = OccasionAccess.claimedOwnerID
+            if claimed == nil || claimed == accountID {
+                pairingNickname = legacy
+                UserDefaults.standard.set(legacy, forKey: pairingStorageKey(for: accountID))
+                UserDefaults.standard.removeObject(forKey: Self.pairingNameKey)
+                return
+            }
+        }
+        pairingNickname = ""
+    }
+
+    private func clearPairingNicknameStorage() {
+        UserDefaults.standard.removeObject(forKey: Self.pairingNameKey)
+        let prefix = Self.pairingNameKey + "."
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix(prefix) {
+            UserDefaults.standard.removeObject(forKey: key)
         }
     }
 
@@ -848,6 +905,8 @@ final class AuthSession: ObservableObject {
         isAuthenticated = true
         currentLogin = saved.login ?? saved.email
         currentAccountID = saved.accountID
+        refreshPairingNickname()
+        syncDataScope()
     }
 
     private func clearPersistedSession() {
@@ -897,6 +956,8 @@ final class AuthSession: ObservableObject {
         isAuthenticated = true
         currentLogin = saved.login ?? saved.email
         currentAccountID = saved.accountID
+        refreshPairingNickname()
+        syncDataScope()
         persistSession()
         return true
     }
@@ -965,7 +1026,7 @@ final class AuthSession: ObservableObject {
         deleteKeychain(account: Self.credentialsAccount)
         UserDefaults.standard.removeObject(forKey: Self.lastLoginKey)
         UserDefaults.standard.removeObject(forKey: Self.rememberMeKey)
-        UserDefaults.standard.removeObject(forKey: Self.pairingNameKey)
+        clearPairingNicknameStorage()
         UserDefaults.standard.removeObject(forKey: Self.prefersFaceIDKey)
         UserDefaults.standard.removeObject(forKey: Self.answeredFaceIDKey)
     }
